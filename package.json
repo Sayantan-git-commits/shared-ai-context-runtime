@@ -1,0 +1,22 @@
+{
+  "name": "ctx-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run --workspace @ctx/schemas build && npm run --workspace @ctx/serializers build && npm run --workspace @ctx/client-adapters build && npm run --workspace @ctx/api build && npm run --workspace @ctx/mcp-server build && npm run --workspace ctx build",
+    "test": "npm run --workspaces --if-present test && node --test tests/e2e/**/*.test.ts",
+    "cli": "node apps/cli/dist/index.js",
+    "ctx": "node apps/cli/dist/index.js",
+    "api": "node apps/api/dist/index.js",
+    "mcp": "node apps/mcp-server/dist/index.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "@types/node": "^22.13.0"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@ctx/api",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@ctx/schemas": "*",
+    "@ctx/serializers": "*",
+    "fastify": "^5.2.1",
+    "@fastify/cors": "^10.0.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.11",
+    "typescript": "^5.7.3"
+  }
+}
