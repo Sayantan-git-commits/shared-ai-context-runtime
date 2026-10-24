@@ -2,6 +2,10 @@
 
 <div align="center">
 
+<img src="./assets/poster.svg" alt="Shared AI Context Runtime Banner" width="100%" />
+
+<br/><br/>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-24+-green.svg?logo=node.js)](https://nodejs.org/)
