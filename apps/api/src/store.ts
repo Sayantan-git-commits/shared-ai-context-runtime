@@ -55,7 +55,7 @@ export interface ContextStore {
   acquireTaskLease(taskId: string, agentId: string, durationSeconds?: number): Promise<{ task: Task; leaseToken: string }>;
   releaseTaskLease(taskId: string, leaseToken: string): Promise<Task>;
   close(): Promise<void>;
-  checkHealth?(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; error?: string }>;
+  checkHealth?(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; storeType?: string; error?: string }>;
 }
 
 export class MemoryContextStore implements ContextStore {
@@ -318,8 +318,18 @@ export class MemoryContextStore implements ContextStore {
     // In-memory store needs no socket teardown
   }
 
-  public async checkHealth(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number }> {
-    return { ok: true, database: true, migrationsApplied: 0 };
+  public async checkHealth(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; storeType: string; error?: string }> {
+    const isProd = process.env.NODE_ENV === "production";
+    if (isProd) {
+      return {
+        ok: false,
+        database: false,
+        migrationsApplied: 0,
+        storeType: "memory",
+        error: "Ephemeral memory store cannot be used in production mode",
+      };
+    }
+    return { ok: true, database: false, migrationsApplied: 0, storeType: "memory" };
   }
 }
 
@@ -730,24 +740,36 @@ export class PostgresContextStore implements ContextStore {
     await this.pool.end();
   }
 
-  async checkHealth(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; error?: string }> {
+  async checkHealth(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; storeType: string; error?: string }> {
     try {
       await this.pool.query("SELECT 1 AS alive");
       const migRes = await this.pool
         .query("SELECT COUNT(*) AS count FROM schema_migrations")
         .catch(() => ({ rows: [{ count: "0" }] }));
       const count = parseInt(migRes.rows[0]?.count || "0", 10);
+      if (count === 0) {
+        return {
+          ok: false,
+          database: true,
+          migrationsApplied: 0,
+          storeType: "postgres",
+          error: "Database migrations pending",
+        };
+      }
       return {
-        ok: count > 0,
+        ok: true,
         database: true,
         migrationsApplied: count,
+        storeType: "postgres",
       };
     } catch (err: any) {
+      console.error("[HEALTH_CHECK_ERROR] Database connection check failed:", err.message);
       return {
         ok: false,
         database: false,
         migrationsApplied: 0,
-        error: err.message,
+        storeType: "postgres",
+        error: "Database unavailable",
       };
     }
   }

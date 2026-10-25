@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_21%2F21-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_24%2F24-brightgreen.svg)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
@@ -325,6 +325,9 @@ npm test
 ✔ API: authentication middleware enforces token check on protected routes
 ✔ API: multi-tenant isolation prevents cross-organization access
 ✔ API: health check reports ready status and fails when dependencies are unhealthy
+✔ API: health check never exposes internal infrastructure or connection strings
+✔ API: in-memory store is rejected from production mode and reports unhealthy
+✔ API: validateStartupConfig prohibits ephemeral storage in production
 ✔ API: concurrent checkpoint creation maintains atomic version sequence
 ✔ Git inspector reports repo state safely
 ✔ Config manager saves and loads .ctx/config.json
@@ -337,7 +340,7 @@ npm test
 ✔ MCP Server: workingTreeClean defaults to fail-closed (clean: false) when omitted or dirty
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-21 passed, 0 failed
+24 passed, 0 failed
 ```
 
 ---

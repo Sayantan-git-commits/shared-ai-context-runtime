@@ -26,23 +26,25 @@ export function isSensitivePath(filePath: string, customPatterns: RegExp[] = [])
 export function redactSecrets(diff: string): string {
   if (!diff) return diff;
   let out = diff;
-  // 1. Private keys
+  // 1. Private keys (RSA, EC, OPENSSH, DSA, PGP)
   out = out.replace(/-----BEGIN [A-Z0-9_\s-]+PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9_\s-]+PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]");
+  out = out.replace(/-----BEGIN PGP PRIVATE KEY BLOCK-----[\s\S]*?-----END PGP PRIVATE KEY BLOCK-----/gi, "[REDACTED PRIVATE KEY]");
   
-  // 2. Database & broker connection URLs with embedded credentials (e.g. postgresql://user:pass@host)
+  // 2. Database & broker connection URLs with embedded plain or URL-encoded credentials (e.g. postgresql://user:p%40ss@host)
   out = out.replace(
-    /(\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp[s]?):\/\/[^:\s]+:)([^@\s]+)(@)/gi,
+    /(\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp[s]?):\/\/[^:\s\/]+:)([^@\s\/]+)(@)/gi,
     "$1[REDACTED]$3"
   );
 
   // 3. JSON Web Tokens (JWT)
   out = out.replace(/\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b/g, "[REDACTED JWT]");
 
-  // 4. Well-known API token prefixes (sk-, ghp_, xoxb-, AKIA)
-  out = out.replace(/\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g, "[REDACTED GITHUB TOKEN]");
+  // 4. Well-known API token prefixes (sk-, ghp_, github_pat_, xoxb-, AKIA, ctx_)
+  out = out.replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/g, "[REDACTED GITHUB TOKEN]");
   out = out.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED SLACK TOKEN]");
   out = out.replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED API KEY]");
   out = out.replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED AWS ACCESS KEY]");
+  out = out.replace(/\bctx_[a-zA-Z0-9_]{16,}\b/g, "[REDACTED CTX TOKEN]");
 
   // 5. Authorization headers (Bearer / Basic)
   out = out.replace(/(\b(?:Authorization|Proxy-Authorization)\s*:\s*Bearer\s+)[A-Za-z0-9._~+/-]{16,}\b/gi, "$1[REDACTED]");

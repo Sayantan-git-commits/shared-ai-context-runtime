@@ -9,11 +9,14 @@ import {
   ConflictError,
 } from "./store.js";
 
+import { validateStartupConfig } from "./config.js";
+
 export {
   type ContextStore,
   MemoryContextStore,
   PostgresContextStore,
   ConflictError,
+  validateStartupConfig,
 };
 import { ContextSerializer } from "@ctx/serializers";
 import {

@@ -1,21 +1,23 @@
 import { buildServer } from "./server.js";
 import { PostgresContextStore, MemoryContextStore } from "./store.js";
+import { validateStartupConfig } from "./config.js";
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "127.0.0.1";
 
-if (!process.env.DATABASE_URL) {
-  if (process.env.CTX_STORE !== "memory") {
-    console.error("FATAL: DATABASE_URL is required for durable persistence.");
-    console.error("Set DATABASE_URL=postgresql://user:pass@host:5432/ctx_db");
-    console.error("For ephemeral in-memory test mode only, explicitly pass CTX_STORE=memory.");
-    process.exit(1);
+let startupConfig: { storeType: "postgres" | "memory"; databaseUrl?: string };
+try {
+  startupConfig = validateStartupConfig(process.env);
+  if (startupConfig.storeType === "memory") {
+    console.warn("[WARN] Starting with ephemeral in-memory store (CTX_STORE=memory). All checkpoints will be lost on exit.");
   }
-  console.warn("[WARN] Starting with ephemeral in-memory store (CTX_STORE=memory). All checkpoints will be lost on exit.");
+} catch (err: any) {
+  console.error(err.message);
+  process.exit(1);
 }
 
-const store = process.env.DATABASE_URL
-  ? new PostgresContextStore(process.env.DATABASE_URL)
+const store = startupConfig.databaseUrl
+  ? new PostgresContextStore(startupConfig.databaseUrl)
   : new MemoryContextStore();
 
 const server = buildServer({

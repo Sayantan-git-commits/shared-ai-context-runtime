@@ -85,18 +85,34 @@ diff --git a/config.env b/config.env
 test("Git: redactSecrets sanitizes database connection URLs and JWT tokens", () => {
   const diffWithDbAndJwt = `
 +DATABASE_URL="postgresql://ctx_admin:SuperSecretDbPassword99@cluster.internal:5432/production_db"
++URL_ENCODED_DB="postgresql://app_user:p%40ss%3Aword%21%2399@cluster.internal:5432/production_db"
 +AMQP_URL="amqp://guest:P@ssword!@broker.internal:5672/"
 +USER_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 +BASIC_AUTH="Authorization: Basic dXNlcjpwYXNzd29yZA=="
++CTX_SECRET="ctx_sec_abcdef1234567890"
++GITHUB_FINE_GRAINED="github_pat_11ABCDE_12345678901234567890123456789012345678901234567890"
++-----BEGIN PGP PRIVATE KEY BLOCK-----
++Version: GnuPG v2
++lQOYBF2X...
++=xyz1
++-----END PGP PRIVATE KEY BLOCK-----
 `;
 
   const redacted = redactSecrets(diffWithDbAndJwt);
   assert.ok(!redacted.includes("SuperSecretDbPassword99"), "Database password in connection URL must be redacted");
+  assert.ok(!redacted.includes("p%40ss%3Aword%21%2399"), "URL-encoded database password must be redacted");
   assert.ok(!redacted.includes("P@ssword!"), "Broker password in connection URL must be redacted");
   assert.ok(!redacted.includes("SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"), "JWT signature must be redacted");
   assert.ok(!redacted.includes("dXNlcjpwYXNzd29yZA=="), "Basic auth credentials must be redacted");
+  assert.ok(!redacted.includes("ctx_sec_abcdef1234567890"), "CTX token must be redacted");
+  assert.ok(!redacted.includes("github_pat_11ABCDE"), "Fine-grained PAT must be redacted");
+  assert.ok(!redacted.includes("lQOYBF2X"), "PGP private key block must be redacted");
   assert.ok(redacted.includes("postgresql://ctx_admin:[REDACTED]@cluster.internal:5432/production_db"));
+  assert.ok(redacted.includes("postgresql://app_user:[REDACTED]@cluster.internal:5432/production_db"));
   assert.ok(redacted.includes("[REDACTED JWT]"));
+  assert.ok(redacted.includes("[REDACTED CTX TOKEN]"));
+  assert.ok(redacted.includes("[REDACTED GITHUB TOKEN]"));
+  assert.ok(redacted.includes("[REDACTED PRIVATE KEY]"));
 });
 
 test("Git: isSensitivePath identifies files that must never have diff contents captured", () => {

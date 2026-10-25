@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildServer } from "./server.js";
+import { buildServer, MemoryContextStore, validateStartupConfig } from "./server.js";
 
 test("API: health check returns ok", async () => {
   const app = buildServer();
@@ -387,15 +387,33 @@ test("API: multi-tenant isolation prevents cross-organization access", async () 
 });
 
 test("API: health check reports ready status and fails when dependencies are unhealthy", async () => {
-  // 1. Healthy store
+  // 1. Healthy in-memory store (in non-production environment)
   const healthyApp = buildServer({ allowAnonymous: true });
   const healthyRes = await healthyApp.inject({ method: "GET", url: "/health" });
   assert.equal(healthyRes.statusCode, 200);
   const healthyJson = healthyRes.json();
   assert.equal(healthyJson.status, "ok");
-  assert.equal(healthyJson.database, true);
+  assert.equal(healthyJson.ok, true);
+  assert.equal(healthyJson.storeType, "memory");
 
-  // 2. Unhealthy store (e.g. database down or migrations pending)
+  // 2. Healthy PostgreSQL store with migrations
+  const mockHealthyPg: any = {
+    checkHealth: async () => ({
+      ok: true,
+      database: true,
+      migrationsApplied: 3,
+      storeType: "postgres",
+    }),
+  };
+  const pgApp = buildServer({ store: mockHealthyPg, allowAnonymous: true });
+  const pgRes = await pgApp.inject({ method: "GET", url: "/health" });
+  assert.equal(pgRes.statusCode, 200);
+  const pgJson = pgRes.json();
+  assert.equal(pgJson.status, "ok");
+  assert.equal(pgJson.database, true);
+  assert.equal(pgJson.migrationsApplied, 3);
+
+  // 3. Unhealthy store (e.g. database down or migrations pending)
   const failingStore: any = {
     checkHealth: async () => ({
       ok: false,
@@ -411,6 +429,82 @@ test("API: health check reports ready status and fails when dependencies are unh
   assert.equal(failingJson.status, "unhealthy");
   assert.equal(failingJson.database, false);
   assert.ok(failingJson.error.includes("Connection refused"));
+});
+
+test("API: health check never exposes internal infrastructure or connection strings", async () => {
+  const mockPgStore: any = {
+    checkHealth: async () => {
+      // Simulates PostgresContextStore sanitization behavior
+      return {
+        ok: false,
+        database: false,
+        migrationsApplied: 0,
+        storeType: "postgres",
+        error: "Database unavailable",
+      };
+    },
+  };
+
+  const app = buildServer({ store: mockPgStore, allowAnonymous: true });
+  const res = await app.inject({ method: "GET", url: "/health" });
+  assert.equal(res.statusCode, 503);
+  const json = res.json();
+  assert.equal(json.status, "unhealthy");
+  assert.equal(json.error, "Database unavailable");
+
+  const responseText = res.body;
+  assert.ok(!responseText.includes("10.128.0.45"), "Must not leak internal IP/hostname");
+  assert.ok(!responseText.includes("super_secret_db_password"), "Must not leak password");
+  assert.ok(!responseText.includes("ECONNREFUSED"), "Must not leak raw driver errors");
+});
+
+test("API: in-memory store is rejected from production mode and reports unhealthy", async () => {
+  const originalEnv = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = "production";
+    const memStore = new MemoryContextStore();
+    const health = await memStore.checkHealth();
+    assert.equal(health.ok, false, "In-memory health must be false in production mode");
+    assert.equal(health.storeType, "memory");
+
+    const app = buildServer({ store: memStore, allowAnonymous: true });
+    const res = await app.inject({ method: "GET", url: "/health" });
+    assert.equal(res.statusCode, 503);
+    const json = res.json();
+    assert.equal(json.status, "unhealthy");
+    assert.equal(json.storeType, "memory");
+  } finally {
+    process.env.NODE_ENV = originalEnv;
+  }
+});
+
+test("API: validateStartupConfig prohibits ephemeral storage in production", () => {
+  // 1. Production with no DATABASE_URL -> fatal error
+  assert.throws(
+    () => validateStartupConfig({ NODE_ENV: "production" }),
+    /Ephemeral in-memory storage is strictly prohibited in production mode/
+  );
+
+  // 2. Production with CTX_STORE=memory -> fatal error
+  assert.throws(
+    () => validateStartupConfig({ NODE_ENV: "production", CTX_STORE: "memory" }),
+    /Ephemeral in-memory storage is strictly prohibited in production mode/
+  );
+
+  // 3. Development without CTX_STORE -> fatal error (requires explicit flag)
+  assert.throws(
+    () => validateStartupConfig({ NODE_ENV: "development" }),
+    /DATABASE_URL is required for durable persistence/
+  );
+
+  // 4. Development with CTX_STORE=memory -> allowed
+  const devMem = validateStartupConfig({ NODE_ENV: "development", CTX_STORE: "memory" });
+  assert.equal(devMem.storeType, "memory");
+
+  // 5. Production with DATABASE_URL -> allowed postgres
+  const prodPg = validateStartupConfig({ NODE_ENV: "production", DATABASE_URL: "postgresql://user:pass@host:5432/db" });
+  assert.equal(prodPg.storeType, "postgres");
+  assert.equal(prodPg.databaseUrl, "postgresql://user:pass@host:5432/db");
 });
 
 test("API: concurrent checkpoint creation maintains atomic version sequence", async () => {
