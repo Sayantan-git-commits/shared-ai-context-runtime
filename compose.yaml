@@ -28,7 +28,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://postgres:ctx_password@postgres:5432/ctx_db
-    command: ["node", "scripts/migrate.ts"]
+    command: ["node", "scripts/migrate.js"]
 
   ctx-api:
     build:

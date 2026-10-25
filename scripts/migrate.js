@@ -9,13 +9,13 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const migrationsDir = path.join(rootDir, "migrations");
 
-export async function runMigrations(dbUrl?: string): Promise<{ applied: string[]; skipped: string[] }> {
+export async function runMigrations(dbUrl) {
   const connectionString = dbUrl || process.env.DATABASE_URL || "postgresql://postgres@127.0.0.1:5432/ctx_db";
   const client = new Client({ connectionString });
   await client.connect();
 
-  const applied: string[] = [];
-  const skipped: string[] = [];
+  const applied = [];
+  const skipped = [];
 
   try {
     // 1. Create migration ledger table if not exists
@@ -28,7 +28,7 @@ export async function runMigrations(dbUrl?: string): Promise<{ applied: string[]
 
     // 2. Fetch applied migrations
     const res = await client.query("SELECT version FROM schema_migrations ORDER BY version ASC");
-    const appliedSet = new Set(res.rows.map((r: any) => r.version));
+    const appliedSet = new Set(res.rows.map((r) => r.version));
 
     // 3. Read migration files in deterministic alphabetical order
     const files = fs.readdirSync(migrationsDir)

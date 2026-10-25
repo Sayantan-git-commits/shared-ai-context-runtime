@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/**/*.test.js"
+    "test": "node --test dist/*.test.js"
   },
   "dependencies": {
     "zod": "^3.24.2"
