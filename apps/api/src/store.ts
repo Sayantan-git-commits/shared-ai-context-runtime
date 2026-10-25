@@ -55,6 +55,7 @@ export interface ContextStore {
   acquireTaskLease(taskId: string, agentId: string, durationSeconds?: number): Promise<{ task: Task; leaseToken: string }>;
   releaseTaskLease(taskId: string, leaseToken: string): Promise<Task>;
   close(): Promise<void>;
+  checkHealth?(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; error?: string }>;
 }
 
 export class MemoryContextStore implements ContextStore {
@@ -315,6 +316,10 @@ export class MemoryContextStore implements ContextStore {
 
   public async close(): Promise<void> {
     // In-memory store needs no socket teardown
+  }
+
+  public async checkHealth(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number }> {
+    return { ok: true, database: true, migrationsApplied: 0 };
   }
 }
 
@@ -723,5 +728,27 @@ export class PostgresContextStore implements ContextStore {
 
   async close(): Promise<void> {
     await this.pool.end();
+  }
+
+  async checkHealth(): Promise<{ ok: boolean; database: boolean; migrationsApplied: number; error?: string }> {
+    try {
+      await this.pool.query("SELECT 1 AS alive");
+      const migRes = await this.pool
+        .query("SELECT COUNT(*) AS count FROM schema_migrations")
+        .catch(() => ({ rows: [{ count: "0" }] }));
+      const count = parseInt(migRes.rows[0]?.count || "0", 10);
+      return {
+        ok: count > 0,
+        database: true,
+        migrationsApplied: count,
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        database: false,
+        migrationsApplied: 0,
+        error: err.message,
+      };
+    }
   }
 }

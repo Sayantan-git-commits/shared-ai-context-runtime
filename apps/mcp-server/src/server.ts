@@ -155,7 +155,7 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
       taskId: z.string().uuid().optional().describe("Optional active task UUID"),
       branch: z.string().describe("Active Git branch"),
       gitCommit: z.string().optional().describe("Current HEAD commit hash"),
-      workingTreeClean: z.boolean().describe("Whether working tree has uncommitted changes"),
+      workingTreeClean: z.boolean().optional().describe("Whether working tree is verified clean. Defaults to false if omitted (fail-closed)."),
       changedPaths: z.array(z.string()).default([]).describe("List of modified files"),
       completedItems: z
         .array(
@@ -187,7 +187,9 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
           branch,
           gitCommit,
           workingTree: {
-            clean: workingTreeClean !== undefined ? workingTreeClean : true,
+            clean: typeof workingTreeClean === "boolean"
+              ? workingTreeClean && (!changedPaths || changedPaths.length === 0)
+              : false,
             changedPaths: changedPaths || [],
             untrackedPaths: [],
           },

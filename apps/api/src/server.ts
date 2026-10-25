@@ -165,7 +165,22 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     return task;
   }
 
-  server.get("/health", async () => {
+  server.get("/health", async (_request, reply) => {
+    if (typeof store.checkHealth === "function") {
+      const health = await store.checkHealth();
+      if (!health.ok) {
+        return reply.status(503).send({
+          status: "unhealthy",
+          timestamp: new Date().toISOString(),
+          ...health,
+        });
+      }
+      return {
+        status: "ok",
+        timestamp: new Date().toISOString(),
+        ...health,
+      };
+    }
     return { status: "ok", timestamp: new Date().toISOString() };
   });
 
@@ -294,6 +309,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
     }
+    if (parse.data.taskId) {
+      const task = await store.getTask(parse.data.taskId);
+      if (!task || task.projectId !== projectId) {
+        return reply.status(400).send({
+          error: "Invalid task",
+          message: "The specified taskId does not belong to this project",
+        });
+      }
+    }
     const checkpoint = await store.createCheckpoint(parse.data);
 
     // Audit event log
@@ -385,6 +409,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
     }
+    if (parse.data.taskId) {
+      const task = await store.getTask(parse.data.taskId);
+      if (!task || task.projectId !== projectId) {
+        return reply.status(400).send({
+          error: "Invalid task",
+          message: "The specified taskId does not belong to this project",
+        });
+      }
+    }
     const event = await store.recordEvent(parse.data);
     return reply.status(201).send(event);
   });
@@ -400,6 +433,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     }
 
     const checkpoint = await store.getLatestCheckpoint(projectId);
+    if (parse.data.taskId) {
+      const explicitTask = await store.getTask(parse.data.taskId);
+      if (!explicitTask || explicitTask.projectId !== projectId) {
+        return reply.status(403).send({
+          error: "Forbidden",
+          message: "The requested taskId does not belong to this project",
+        });
+      }
+    }
     const taskId = parse.data.taskId || checkpoint?.taskId || undefined;
     const task = taskId ? await store.getTask(taskId) : null;
     const memories = await store.listMemories(projectId);

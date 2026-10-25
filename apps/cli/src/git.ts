@@ -2,7 +2,25 @@ import { execSync } from "node:child_process";
 import type { WorkingTreeSummary } from "@ctx/schemas";
 
 /**
- * Redacts common secrets, private keys, API keys, and authorization tokens
+ * Known sensitive file path patterns that must never have diff contents captured.
+ */
+export const DEFAULT_SENSITIVE_PATH_PATTERNS = [
+  /(?:^|\/)\.env(?:\..+)?$/i,
+  /(?:^|\/)credentials(?:\..+)?$/i,
+  /(?:^|\/)[^/]*secret[^/]*\.(?:json|yaml|yml|env)$/i,
+  /\.(?:pem|key|pkcs12|pfx|keystore)$/i,
+  /(?:^|\/)id_(?:rsa|ed25519|ecdsa)(?:\..+)?$/i,
+  /(?:^|\/)kubeconfig(?:\..+)?$/i,
+  /(?:^|\/)[^/]*service-account[^/]*\.json$/i,
+];
+
+export function isSensitivePath(filePath: string, customPatterns: RegExp[] = []): boolean {
+  const normalized = filePath.replace(/\\/g, "/");
+  return [...DEFAULT_SENSITIVE_PATH_PATTERNS, ...customPatterns].some((p) => p.test(normalized));
+}
+
+/**
+ * Redacts common secrets, private keys, API keys, database credentials, and authorization tokens
  * from diff patches before saving into context checkpoints.
  */
 export function redactSecrets(diff: string): string {
@@ -10,16 +28,29 @@ export function redactSecrets(diff: string): string {
   let out = diff;
   // 1. Private keys
   out = out.replace(/-----BEGIN [A-Z0-9_\s-]+PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9_\s-]+PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]");
-  // 2. Well-known API key formats
-  out = out.replace(/\bgh[pousr]_[A-Za-z0-9_]{36,}\b/g, "[REDACTED GITHUB TOKEN]");
+  
+  // 2. Database & broker connection URLs with embedded credentials (e.g. postgresql://user:pass@host)
+  out = out.replace(
+    /(\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp[s]?):\/\/[^:\s]+:)([^@\s]+)(@)/gi,
+    "$1[REDACTED]$3"
+  );
+
+  // 3. JSON Web Tokens (JWT)
+  out = out.replace(/\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b/g, "[REDACTED JWT]");
+
+  // 4. Well-known API token prefixes (sk-, ghp_, xoxb-, AKIA)
+  out = out.replace(/\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g, "[REDACTED GITHUB TOKEN]");
   out = out.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED SLACK TOKEN]");
   out = out.replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED API KEY]");
   out = out.replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED AWS ACCESS KEY]");
-  // 3. Bearer tokens in headers or code
-  out = out.replace(/(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}\b/gi, "$1[REDACTED]");
-  // 4. Key/value assignments matching secret names where value was not already redacted
+
+  // 5. Authorization headers (Bearer / Basic)
+  out = out.replace(/(\b(?:Authorization|Proxy-Authorization)\s*:\s*Bearer\s+)[A-Za-z0-9._~+/-]{16,}\b/gi, "$1[REDACTED]");
+  out = out.replace(/(\b(?:Authorization|Proxy-Authorization)\s*:\s*Basic\s+)[A-Za-z0-9+/=]{10,}\b/gi, "$1[REDACTED]");
+
+  // 6. Generic credential key/value assignments
   out = out.replace(
-    /(["']?(?:api[_-]?key|auth[_-]?token|access[_-]?token|client[_-]?secret|password|passwd|private[_-]?key)["']?\s*[:=]\s*["']?)(?!\[REDACTED)([^"'\s\r\n]{6,})(["']?)/gi,
+    /(["']?(?:api[_-]?key|auth[_-]?token|access[_-]?token|client[_-]?secret|session[_-]?secret|encryption[_-]?key|signing[_-]?key|password|passwd|private[_-]?key)["']?\s*[:=]\s*["']?)(?!\[REDACTED)([^"'\s\r\n]{6,})(["']?)/gi,
     "$1[REDACTED]$3"
   );
   return out;
@@ -97,7 +128,10 @@ export function inspectGit(cwd: string = process.cwd()): GitRepoState {
   let diffPatch: string | undefined = undefined;
   let diffSummary: string | undefined = undefined;
   try {
-    const rawDiff = execSync("git diff HEAD", { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 1024 * 512 });
+    const rawDiff = execSync(
+      'git diff HEAD -- . ":(exclude)*.env" ":(exclude)*.env.*" ":(exclude)*credentials*" ":(exclude)*.pem" ":(exclude)*.key" ":(exclude)*id_rsa*" ":(exclude)*id_ed25519*" ":(exclude)*kubeconfig*"',
+      { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 1024 * 512 }
+    );
     if (rawDiff.trim().length > 0) {
       const sanitized = redactSecrets(rawDiff);
       diffPatch = sanitized.length > 25000 ? sanitized.slice(0, 25000) + "\n... [diff truncated for length]" : sanitized;

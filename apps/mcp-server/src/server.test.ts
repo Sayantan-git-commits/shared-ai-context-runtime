@@ -78,3 +78,66 @@ test("MCP Server: enforces authentication when calling protected API routes", as
     await api.close();
   }
 });
+
+test("MCP Server: workingTreeClean defaults to fail-closed (clean: false) when omitted or dirty", async () => {
+  const store = new MemoryContextStore();
+  const api = buildServer({ store, authToken: "mcp-git-token" });
+  const address = await api.listen({ port: 0, host: "127.0.0.1" });
+
+  try {
+    const mcp = createCtxMcpServer({ apiBaseUrl: address, authToken: "mcp-git-token" });
+    const resolveTool = (mcp as any)._registeredTools["ctx_project_resolve"];
+    const projRes = await resolveTool.handler({ projectName: "git-clean-test" });
+    const project = JSON.parse(projRes.content[0].text);
+
+    const saveTool = (mcp as any)._registeredTools["ctx_save_checkpoint"];
+    const getCheckpointTool = (mcp as any)._registeredTools["ctx_get_checkpoint"];
+
+    // Case 1: workingTreeClean omitted -> must fail-closed to clean: false
+    await saveTool.handler({
+      projectId: project.id,
+      branch: "main",
+      nextAction: "Step 1",
+    });
+    const cp1Res = await getCheckpointTool.handler({ projectId: project.id, latestOnly: true });
+    const cp1 = JSON.parse(cp1Res.content[0].text);
+    assert.equal(cp1.workingTree.clean, false, "Omitted workingTreeClean must default to false (fail-closed)");
+
+    // Case 2: workingTreeClean explicitly false -> clean: false
+    await saveTool.handler({
+      projectId: project.id,
+      branch: "main",
+      workingTreeClean: false,
+      nextAction: "Step 2",
+    });
+    const cp2Res = await getCheckpointTool.handler({ projectId: project.id, latestOnly: true });
+    const cp2 = JSON.parse(cp2Res.content[0].text);
+    assert.equal(cp2.workingTree.clean, false);
+
+    // Case 3: workingTreeClean true BUT changedPaths non-empty -> clean: false
+    await saveTool.handler({
+      projectId: project.id,
+      branch: "main",
+      workingTreeClean: true,
+      changedPaths: ["src/index.ts"],
+      nextAction: "Step 3",
+    });
+    const cp3Res = await getCheckpointTool.handler({ projectId: project.id, latestOnly: true });
+    const cp3 = JSON.parse(cp3Res.content[0].text);
+    assert.equal(cp3.workingTree.clean, false, "Dirty files must override workingTreeClean: true to false");
+
+    // Case 4: workingTreeClean true AND changedPaths empty -> clean: true
+    await saveTool.handler({
+      projectId: project.id,
+      branch: "main",
+      workingTreeClean: true,
+      changedPaths: [],
+      nextAction: "Step 4",
+    });
+    const cp4Res = await getCheckpointTool.handler({ projectId: project.id, latestOnly: true });
+    const cp4 = JSON.parse(cp4Res.content[0].text);
+    assert.equal(cp4.workingTree.clean, true, "Verified clean working tree must be true");
+  } finally {
+    await api.close();
+  }
+});

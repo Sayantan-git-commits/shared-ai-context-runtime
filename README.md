@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_17%2F17-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_21%2F21-brightgreen.svg)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
@@ -324,16 +324,20 @@ npm test
 ✔ API: resolve project and checkpoint workflow
 ✔ API: authentication middleware enforces token check on protected routes
 ✔ API: multi-tenant isolation prevents cross-organization access
+✔ API: health check reports ready status and fails when dependencies are unhealthy
 ✔ API: concurrent checkpoint creation maintains atomic version sequence
 ✔ Git inspector reports repo state safely
 ✔ Config manager saves and loads .ctx/config.json
 ✔ CLI: normalizeArgv supports path-first syntax 'ctx <path> continue'
 ✔ Git: redactSecrets masks sensitive credentials and API keys in diffs
+✔ Git: redactSecrets sanitizes database connection URLs and JWT tokens
+✔ Git: isSensitivePath identifies files that must never have diff contents captured
 ✔ MCP Server: initializes with all core tools registered
 ✔ MCP Server: enforces authentication when calling protected API routes
+✔ MCP Server: workingTreeClean defaults to fail-closed (clean: false) when omitted or dirty
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-17 passed, 0 failed
+21 passed, 0 failed
 ```
 
 ---

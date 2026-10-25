@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspectGit, redactSecrets } from "./git.js";
+import { inspectGit, redactSecrets, isSensitivePath } from "./git.js";
 import { loadLocalConfig, saveLocalConfig, getCtxConfigPath } from "./config.js";
 import { normalizeArgv } from "./argv.js";
 import fs from "node:fs";
@@ -80,4 +80,39 @@ diff --git a/config.env b/config.env
   assert.ok(redacted.includes("[REDACTED GITHUB TOKEN]"));
   assert.ok(redacted.includes("[REDACTED AWS ACCESS KEY]"));
   assert.ok(redacted.includes("[REDACTED PRIVATE KEY]"));
+});
+
+test("Git: redactSecrets sanitizes database connection URLs and JWT tokens", () => {
+  const diffWithDbAndJwt = `
++DATABASE_URL="postgresql://ctx_admin:SuperSecretDbPassword99@cluster.internal:5432/production_db"
++AMQP_URL="amqp://guest:P@ssword!@broker.internal:5672/"
++USER_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
++BASIC_AUTH="Authorization: Basic dXNlcjpwYXNzd29yZA=="
+`;
+
+  const redacted = redactSecrets(diffWithDbAndJwt);
+  assert.ok(!redacted.includes("SuperSecretDbPassword99"), "Database password in connection URL must be redacted");
+  assert.ok(!redacted.includes("P@ssword!"), "Broker password in connection URL must be redacted");
+  assert.ok(!redacted.includes("SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"), "JWT signature must be redacted");
+  assert.ok(!redacted.includes("dXNlcjpwYXNzd29yZA=="), "Basic auth credentials must be redacted");
+  assert.ok(redacted.includes("postgresql://ctx_admin:[REDACTED]@cluster.internal:5432/production_db"));
+  assert.ok(redacted.includes("[REDACTED JWT]"));
+});
+
+test("Git: isSensitivePath identifies files that must never have diff contents captured", () => {
+  assert.equal(isSensitivePath(".env"), true);
+  assert.equal(isSensitivePath(".env.production"), true);
+  assert.equal(isSensitivePath("config/credentials.json"), true);
+  assert.equal(isSensitivePath("certs/server.key"), true);
+  assert.equal(isSensitivePath("certs/cert.pem"), true);
+  assert.equal(isSensitivePath("keys/id_rsa"), true);
+  assert.equal(isSensitivePath("keys/id_ed25519"), true);
+  assert.equal(isSensitivePath(".kube/kubeconfig"), true);
+  assert.equal(isSensitivePath("auth/service-account-key.json"), true);
+
+  // Non-sensitive files must pass
+  assert.equal(isSensitivePath("src/index.ts"), false);
+  assert.equal(isSensitivePath("README.md"), false);
+  assert.equal(isSensitivePath("package.json"), false);
+  assert.equal(isSensitivePath("Dockerfile"), false);
 });

@@ -336,6 +336,81 @@ test("API: multi-tenant isolation prevents cross-organization access", async () 
     payload: { formatPreference: "auto" },
   });
   assert.equal(forbiddenAssembleRes.statusCode, 403);
+
+  // 11. Cross-resource spoofing: Tenant B creates Project B
+  const projBRes = await app.inject({
+    method: "POST",
+    url: "/v1/projects/resolve",
+    headers: { authorization: `Bearer ${orgBToken}` },
+    payload: { projectName: "tenant-b-repo" },
+  });
+  assert.equal(projBRes.statusCode, 200);
+  const projB = projBRes.json();
+
+  // Tenant B attempts to attach Tenant A's taskA to a checkpoint in Project B -> 400 Bad Request
+  const crossTaskCheckpointRes = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projB.id}/checkpoints`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+    payload: {
+      taskId: taskA.id,
+      branch: "main",
+      nextAction: "Malicious attach",
+    },
+  });
+  assert.equal(crossTaskCheckpointRes.statusCode, 400);
+
+  // Tenant B attempts to emit an event in Project B referencing Tenant A's taskA -> 400 Bad Request
+  const crossTaskEventRes = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projB.id}/events`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+    payload: {
+      taskId: taskA.id,
+      eventType: "malicious_event",
+      payload: {},
+    },
+  });
+  assert.equal(crossTaskEventRes.statusCode, 400);
+
+  // Tenant B attempts to assemble context in Project B with Tenant A's taskA -> 403 Forbidden
+  const crossTaskAssembleRes = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projB.id}/context/assemble`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+    payload: {
+      taskId: taskA.id,
+      formatPreference: "auto",
+    },
+  });
+  assert.equal(crossTaskAssembleRes.statusCode, 403);
+});
+
+test("API: health check reports ready status and fails when dependencies are unhealthy", async () => {
+  // 1. Healthy store
+  const healthyApp = buildServer({ allowAnonymous: true });
+  const healthyRes = await healthyApp.inject({ method: "GET", url: "/health" });
+  assert.equal(healthyRes.statusCode, 200);
+  const healthyJson = healthyRes.json();
+  assert.equal(healthyJson.status, "ok");
+  assert.equal(healthyJson.database, true);
+
+  // 2. Unhealthy store (e.g. database down or migrations pending)
+  const failingStore: any = {
+    checkHealth: async () => ({
+      ok: false,
+      database: false,
+      migrationsApplied: 0,
+      error: "Connection refused to database",
+    }),
+  };
+  const failingApp = buildServer({ store: failingStore, allowAnonymous: true });
+  const failingRes = await failingApp.inject({ method: "GET", url: "/health" });
+  assert.equal(failingRes.statusCode, 503);
+  const failingJson = failingRes.json();
+  assert.equal(failingJson.status, "unhealthy");
+  assert.equal(failingJson.database, false);
+  assert.ok(failingJson.error.includes("Connection refused"));
 });
 
 test("API: concurrent checkpoint creation maintains atomic version sequence", async () => {
