@@ -22,9 +22,24 @@ export class ConflictError extends Error {
   }
 }
 
+/**
+ * Normalizes git remote repository URLs into a canonical string for stable identity matching.
+ * e.g., 'git@github.com:User/Repo.git' -> 'github.com/user/repo'
+ * e.g., 'https://github.com/User/Repo/' -> 'github.com/user/repo'
+ */
+export function normalizeGitRemote(url?: string | null): string | null {
+  if (!url) return null;
+  let cleaned = url.trim().toLowerCase();
+  cleaned = cleaned.replace(/^(?:git\+)?(?:https?|ssh):\/\//, "");
+  cleaned = cleaned.replace(/^git@([^:]+):/, "$1/");
+  cleaned = cleaned.replace(/\.git\/?$/, "");
+  cleaned = cleaned.replace(/\/+$/, "");
+  return cleaned || null;
+}
+
 export interface ContextStore {
-  resolveProject(gitRemoteUrl?: string, projectName?: string): Promise<Project>;
-  getProject(id: string): Promise<Project | null>;
+  resolveProject(gitRemoteUrl?: string, projectName?: string, organizationId?: string): Promise<Project>;
+  getProject(id: string, organizationId?: string): Promise<Project | null>;
   createTask(input: CreateTaskInput): Promise<Task>;
   getTask(id: string): Promise<Task | null>;
   updateTask(id: string, input: UpdateTaskInput): Promise<Task>;
@@ -48,10 +63,18 @@ export class MemoryContextStore implements ContextStore {
   private memories: Map<string, MemoryEntry[]> = new Map(); // projectId -> memories
   private events: Map<string, AgentEvent[]> = new Map(); // projectId -> events
 
-  public async resolveProject(gitRemoteUrl?: string, projectName?: string): Promise<Project> {
-    // Look up by git remote or name
+  public async resolveProject(
+    gitRemoteUrl?: string,
+    projectName?: string,
+    organizationId?: string
+  ): Promise<Project> {
+    const orgId = organizationId || "00000000-0000-0000-0000-000000000001";
+    const normalizedRemote = normalizeGitRemote(gitRemoteUrl);
+
+    // Look up by tenant organization + git remote or name
     for (const proj of this.projects.values()) {
-      if (gitRemoteUrl && proj.gitRemoteNormalized === gitRemoteUrl) {
+      if (proj.organizationId !== orgId) continue;
+      if (normalizedRemote && proj.gitRemoteNormalized === normalizedRemote) {
         return proj;
       }
       if (projectName && proj.name === projectName) {
@@ -59,13 +82,13 @@ export class MemoryContextStore implements ContextStore {
       }
     }
 
-    // Auto-create default project for development
+    // Auto-create scoped project
     const now = new Date().toISOString();
     const newProject: Project = {
       id: randomUUID(),
-      organizationId: "00000000-0000-0000-0000-000000000001",
+      organizationId: orgId,
       name: projectName || "default-project",
-      gitRemoteNormalized: gitRemoteUrl || null,
+      gitRemoteNormalized: normalizedRemote,
       defaultBranch: "main",
       config: {},
       createdAt: now,
@@ -75,8 +98,13 @@ export class MemoryContextStore implements ContextStore {
     return newProject;
   }
 
-  public async getProject(id: string): Promise<Project | null> {
-    return this.projects.get(id) || null;
+  public async getProject(id: string, organizationId?: string): Promise<Project | null> {
+    const project = this.projects.get(id);
+    if (!project) return null;
+    if (organizationId && project.organizationId !== organizationId) {
+      return null;
+    }
+    return project;
   }
 
   public async createTask(input: CreateTaskInput): Promise<Task> {
@@ -292,39 +320,56 @@ export class PostgresContextStore implements ContextStore {
     this.pool = new Pool({ connectionString });
   }
 
-  public async resolveProject(gitRemoteUrl?: string, projectName?: string): Promise<Project> {
-    if (gitRemoteUrl) {
+  public async resolveProject(
+    gitRemoteUrl?: string,
+    projectName?: string,
+    organizationId?: string
+  ): Promise<Project> {
+    const orgId = organizationId || "00000000-0000-0000-0000-000000000001";
+    const normalizedRemote = normalizeGitRemote(gitRemoteUrl);
+
+    // Ensure organization exists
+    await this.pool.query(
+      `INSERT INTO organizations (id, name)
+       VALUES ($1, $2)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+      [orgId, "Default Organization"]
+    );
+
+    if (normalizedRemote) {
       const res = await this.pool.query(
-        "SELECT * FROM projects WHERE git_remote_normalized = $1 LIMIT 1",
-        [gitRemoteUrl]
+        "SELECT * FROM projects WHERE organization_id = $1 AND git_remote_normalized = $2 LIMIT 1",
+        [orgId, normalizedRemote]
       );
       if (res.rows.length > 0) return this.mapProject(res.rows[0]);
     }
     if (projectName) {
-      const res = await this.pool.query("SELECT * FROM projects WHERE name = $1 LIMIT 1", [
-        projectName,
-      ]);
+      const res = await this.pool.query(
+        "SELECT * FROM projects WHERE organization_id = $1 AND name = $2 LIMIT 1",
+        [orgId, projectName]
+      );
       if (res.rows.length > 0) return this.mapProject(res.rows[0]);
     }
 
-    // Create default project & org
-    const orgRes = await this.pool.query(
-      "INSERT INTO organizations (name) VALUES ($1) ON CONFLICT DO NOTHING RETURNING id",
-      ["Default Org"]
-    );
-    const orgId = orgRes.rows[0]?.id || "00000000-0000-0000-0000-000000000001";
-
+    // Insert concurrently safe with ON CONFLICT
     const insertRes = await this.pool.query(
       `INSERT INTO projects (organization_id, name, git_remote_normalized, default_branch, config_json)
        VALUES ($1, $2, $3, 'main', '{}'::jsonb)
+       ON CONFLICT (organization_id, name) DO UPDATE SET
+         git_remote_normalized = COALESCE(EXCLUDED.git_remote_normalized, projects.git_remote_normalized),
+         updated_at = NOW()
        RETURNING *`,
-      [orgId, projectName || "default-project", gitRemoteUrl || null]
+      [orgId, projectName || "default-project", normalizedRemote]
     );
     return this.mapProject(insertRes.rows[0]);
   }
 
-  public async getProject(id: string): Promise<Project | null> {
-    const res = await this.pool.query("SELECT * FROM projects WHERE id = $1", [id]);
+  public async getProject(id: string, organizationId?: string): Promise<Project | null> {
+    const query = organizationId
+      ? "SELECT * FROM projects WHERE id = $1 AND organization_id = $2"
+      : "SELECT * FROM projects WHERE id = $1";
+    const params = organizationId ? [id, organizationId] : [id];
+    const res = await this.pool.query(query, params);
     if (res.rows.length === 0) return null;
     return this.mapProject(res.rows[0]);
   }
@@ -400,33 +445,45 @@ export class PostgresContextStore implements ContextStore {
   }
 
   public async createCheckpoint(input: CreateCheckpointInput): Promise<Checkpoint> {
-    // Determine next version atomically
-    const verRes = await this.pool.query(
-      "SELECT COALESCE(MAX(version), 0) + 1 AS next_ver FROM checkpoints WHERE project_id = $1",
-      [input.projectId]
-    );
-    const nextVer = verRes.rows[0].next_ver;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Transaction-scoped advisory lock prevents concurrent version collisions for the same project
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [input.projectId]);
 
-    const res = await this.pool.query(
-      `INSERT INTO checkpoints (
-         project_id, task_id, version, branch, git_commit,
-         working_tree_summary, state_json, created_by_agent_id, idempotency_key
-       )
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
-       RETURNING *`,
-      [
-        input.projectId,
-        input.taskId || null,
-        nextVer,
-        input.branch,
-        input.gitCommit || null,
-        JSON.stringify(input.workingTree),
-        JSON.stringify(input.state),
-        input.createdByAgentId || null,
-        input.idempotencyKey || null,
-      ]
-    );
-    return this.mapCheckpoint(res.rows[0]);
+      const verRes = await client.query(
+        "SELECT COALESCE(MAX(version), 0) + 1 AS next_ver FROM checkpoints WHERE project_id = $1",
+        [input.projectId]
+      );
+      const nextVer = verRes.rows[0].next_ver;
+
+      const res = await client.query(
+        `INSERT INTO checkpoints (
+           project_id, task_id, version, branch, git_commit,
+           working_tree_summary, state_json, created_by_agent_id, idempotency_key
+         )
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+         RETURNING *`,
+        [
+          input.projectId,
+          input.taskId || null,
+          nextVer,
+          input.branch,
+          input.gitCommit || null,
+          JSON.stringify(input.workingTree),
+          JSON.stringify(input.state),
+          input.createdByAgentId || null,
+          input.idempotencyKey || null,
+        ]
+      );
+      await client.query("COMMIT");
+      return this.mapCheckpoint(res.rows[0]);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   public async getLatestCheckpoint(projectId: string): Promise<Checkpoint | null> {

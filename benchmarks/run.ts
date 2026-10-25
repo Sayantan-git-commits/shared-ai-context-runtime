@@ -65,6 +65,7 @@ async function runBenchmarks() {
   console.log("================================================================================");
   console.log("             SHARED AI CONTEXT RUNTIME - SERIALIZATION BENCHMARKS                ");
   console.log("               TOON vs. Minified JSON Token Savings & Latency                   ");
+  console.log("               Tokenizer: cl100k_base BPE (via gpt-tokenizer)                   ");
   console.log("================================================================================\n");
 
   const serializer = new ContextSerializer();

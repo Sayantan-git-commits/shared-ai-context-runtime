@@ -4,6 +4,11 @@ import { PostgresContextStore, MemoryContextStore } from "./store.js";
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "127.0.0.1";
 
+if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
+  console.error("FATAL: DATABASE_URL is required in production mode. Ephemeral MemoryContextStore is prohibited.");
+  process.exit(1);
+}
+
 const store = process.env.DATABASE_URL
   ? new PostgresContextStore(process.env.DATABASE_URL)
   : new MemoryContextStore();

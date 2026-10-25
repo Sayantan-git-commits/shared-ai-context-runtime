@@ -23,7 +23,27 @@ import {
 export interface ServerOptions {
   store?: ContextStore;
   authToken?: string;
+  authTokens?: Record<string, string>;
+  allowedOrigins?: string[] | boolean;
   enableRateLimit?: boolean;
+}
+
+function parseAuthTokens(raw?: string): Record<string, string> {
+  if (!raw) return {};
+  try {
+    if (raw.trim().startsWith("{")) {
+      return JSON.parse(raw);
+    }
+  } catch {}
+  // Fallback: comma separated "token:orgId" or "orgId:token"
+  const tokens: Record<string, string> = {};
+  for (const part of raw.split(",")) {
+    const [a, b] = part.split(":").map((s) => s.trim());
+    if (a && b) {
+      tokens[b] = a; // token -> orgId
+    }
+  }
+  return tokens;
 }
 
 export function buildServer(options: ServerOptions = {}): FastifyInstance {
@@ -31,7 +51,11 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   const store = options.store || new MemoryContextStore();
   const serializer = new ContextSerializer();
 
-  server.register(cors, { origin: true });
+  // CORS Configuration
+  const allowedOrigins = options.allowedOrigins !== undefined
+    ? options.allowedOrigins
+    : (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim()) : true);
+  server.register(cors, { origin: allowedOrigins });
 
   if (options.enableRateLimit) {
     server.register(rateLimit, {
@@ -40,25 +64,85 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     });
   }
 
-  const configuredToken = options.authToken || process.env.CTX_AUTH_TOKEN;
-  if (configuredToken) {
-    server.addHook("onRequest", async (request, reply) => {
-      if (request.url === "/health") {
-        return;
-      }
-      const authHeader = request.headers["authorization"];
-      const apiKeyHeader = request.headers["x-api-key"] as string | undefined;
-      const token = authHeader?.startsWith("Bearer ")
-        ? authHeader.slice(7).trim()
-        : apiKeyHeader;
+  const multiTokens = options.authTokens || parseAuthTokens(process.env.CTX_AUTH_TOKENS);
+  const singleToken = options.authToken || process.env.CTX_AUTH_TOKEN;
 
-      if (!token || token !== configuredToken) {
+  server.addHook("onRequest", async (request, reply) => {
+    if (request.url === "/health") {
+      return;
+    }
+    const authHeader = request.headers["authorization"];
+    const apiKeyHeader = request.headers["x-api-key"] as string | undefined;
+    const token = authHeader?.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : apiKeyHeader;
+
+    let orgId = "00000000-0000-0000-0000-000000000001";
+
+    if (Object.keys(multiTokens).length > 0) {
+      if (!token || !multiTokens[token]) {
         return reply.status(401).send({
           error: "Unauthorized",
           message: "Valid Bearer token or x-api-key header required",
         });
       }
-    });
+      orgId = multiTokens[token];
+    } else if (singleToken) {
+      if (!token || token !== singleToken) {
+        return reply.status(401).send({
+          error: "Unauthorized",
+          message: "Valid Bearer token or x-api-key header required",
+        });
+      }
+    }
+
+    (request as any).principal = {
+      organizationId: orgId,
+      agentId: (request.headers["x-agent-id"] as string) || "agent-cli",
+    };
+  });
+
+  async function assertProjectAccess(
+    projectId: string,
+    request: any,
+    reply: any
+  ): Promise<any> {
+    const project = await store.getProject(projectId);
+    if (!project) {
+      reply.status(404).send({ error: "Project not found" });
+      return null;
+    }
+    const principalOrg = request.principal?.organizationId;
+    if (principalOrg && project.organizationId !== principalOrg) {
+      reply.status(403).send({
+        error: "Forbidden",
+        message: "Access denied to project outside authenticated tenant organization",
+      });
+      return null;
+    }
+    return project;
+  }
+
+  async function assertTaskAccess(
+    taskId: string,
+    request: any,
+    reply: any
+  ): Promise<any> {
+    const task = await store.getTask(taskId);
+    if (!task) {
+      reply.status(404).send({ error: "Task not found" });
+      return null;
+    }
+    const project = await store.getProject(task.projectId);
+    const principalOrg = request.principal?.organizationId;
+    if (project && principalOrg && project.organizationId !== principalOrg) {
+      reply.status(403).send({
+        error: "Forbidden",
+        message: "Access denied to task outside authenticated tenant organization",
+      });
+      return null;
+    }
+    return task;
   }
 
   server.get("/health", async () => {
@@ -71,20 +155,28 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
     }
-    const project = await store.resolveProject(parse.data.gitRemoteUrl, parse.data.projectName);
+    const principalOrg = (request as any).principal?.organizationId;
+    const project = await store.resolveProject(
+      parse.data.gitRemoteUrl,
+      parse.data.projectName,
+      parse.data.organizationId || principalOrg
+    );
     return reply.send(project);
   });
 
   server.get("/v1/projects/:projectId", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const project = await store.getProject(projectId);
-    if (!project) return reply.status(404).send({ error: "Project not found" });
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
     return reply.send(project);
   });
 
   // Tasks
   server.post("/v1/projects/:projectId/tasks", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const body = { ...(request.body as object), projectId };
     const parse = CreateTaskInputSchema.safeParse(body);
     if (!parse.success) {
@@ -96,19 +188,25 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   server.get("/v1/projects/:projectId/tasks", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const tasks = await store.listTasks(projectId);
     return reply.send(tasks);
   });
 
   server.get("/v1/tasks/:taskId", async (request, reply) => {
     const { taskId } = request.params as { taskId: string };
-    const task = await store.getTask(taskId);
-    if (!task) return reply.status(404).send({ error: "Task not found" });
+    const task = await assertTaskAccess(taskId, request, reply);
+    if (!task) return;
     return reply.send(task);
   });
 
   server.patch("/v1/tasks/:taskId", async (request, reply) => {
     const { taskId } = request.params as { taskId: string };
+    const task = await assertTaskAccess(taskId, request, reply);
+    if (!task) return;
+
     const parse = UpdateTaskInputSchema.safeParse(request.body);
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
@@ -127,6 +225,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   // Task Leases
   server.post("/v1/tasks/:taskId/lease/acquire", async (request, reply) => {
     const { taskId } = request.params as { taskId: string };
+    const task = await assertTaskAccess(taskId, request, reply);
+    if (!task) return;
+
     const parse = AcquireTaskLeaseInputSchema.safeParse(request.body || {});
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
@@ -144,13 +245,16 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   server.post("/v1/tasks/:taskId/lease/release", async (request, reply) => {
     const { taskId } = request.params as { taskId: string };
+    const task = await assertTaskAccess(taskId, request, reply);
+    if (!task) return;
+
     const parse = ReleaseTaskLeaseInputSchema.safeParse(request.body || {});
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
     }
     try {
-      const task = await store.releaseTaskLease(taskId, parse.data.leaseToken);
-      return reply.send(task);
+      const released = await store.releaseTaskLease(taskId, parse.data.leaseToken);
+      return reply.send(released);
     } catch (err: any) {
       if (err instanceof ConflictError) {
         return reply.status(409).send({ error: "Conflict", message: err.message });
@@ -162,6 +266,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   // Checkpoints
   server.post("/v1/projects/:projectId/checkpoints", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const body = { ...(request.body as object), projectId };
     const parse = CreateCheckpointInputSchema.safeParse(body);
     if (!parse.success) {
@@ -187,6 +294,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   server.get("/v1/projects/:projectId/checkpoints/latest", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const checkpoint = await store.getLatestCheckpoint(projectId);
     if (!checkpoint) return reply.status(404).send({ error: "No checkpoint found" });
     return reply.send(checkpoint);
@@ -194,6 +304,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   server.get("/v1/projects/:projectId/checkpoints", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const checkpoints = await store.listCheckpoints(projectId);
     return reply.send(checkpoints);
   });
@@ -201,12 +314,18 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   // Memories
   server.get("/v1/projects/:projectId/memories", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const memories = await store.listMemories(projectId);
     return reply.send(memories);
   });
 
   server.post("/v1/projects/:projectId/memories", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const body = { ...(request.body as object), projectId };
     const memory = await store.createMemory(body as any);
     return reply.status(201).send(memory);
@@ -214,6 +333,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   server.get("/v1/projects/:projectId/memories/search", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const { q, limit } = request.query as { q?: string; limit?: string };
     if (!q || q.trim().length === 0) {
       return reply.status(400).send({ error: "Query parameter 'q' is required" });
@@ -225,6 +347,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   // Events
   server.get("/v1/projects/:projectId/events", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const { taskId } = request.query as { taskId?: string };
     const events = await store.listEvents(projectId, taskId);
     return reply.send(events);
@@ -232,6 +357,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
 
   server.post("/v1/projects/:projectId/events", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
+
     const body = { ...(request.body as object), projectId };
     const parse = CreateAgentEventInputSchema.safeParse(body);
     if (!parse.success) {
@@ -244,13 +372,12 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   // Context Assembly & TOON Optimization
   server.post("/v1/projects/:projectId/context/assemble", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    const project = await assertProjectAccess(projectId, request, reply);
+    if (!project) return;
     const parse = AssembleContextRequestSchema.safeParse(request.body || {});
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
     }
-
-    const project = await store.getProject(projectId);
-    if (!project) return reply.status(404).send({ error: "Project not found" });
 
     const checkpoint = await store.getLatestCheckpoint(projectId);
     const taskId = parse.data.taskId || checkpoint?.taskId || undefined;

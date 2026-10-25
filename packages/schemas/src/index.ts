@@ -272,6 +272,7 @@ export const ResolveProjectRequestSchema = z.object({
   workingDirectory: z.string().optional(),
   gitRemoteUrl: z.string().optional(),
   projectName: z.string().optional(),
+  organizationId: z.string().uuid().optional(),
 });
 export type ResolveProjectRequest = z.infer<typeof ResolveProjectRequestSchema>;
 

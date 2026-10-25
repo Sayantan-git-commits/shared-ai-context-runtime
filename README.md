@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_12%2F12-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_13%2F13-brightgreen.svg)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
@@ -274,14 +274,15 @@ npm run benchmark
 ================================================================================
              SHARED AI CONTEXT RUNTIME - SERIALIZATION BENCHMARKS                
                TOON vs. Minified JSON Token Savings & Latency                   
+               Tokenizer: cl100k_base BPE (via gpt-tokenizer)                   
 ================================================================================
 
 ┌─────────┬─────────────────────────────────────────────────────┬─────────────┬───────────┬─────────────┬───────────┬─────────────┬─────────────┐
 │ (index) │ Scenario                                            │ JSON Tokens │ JSON (ms) │ TOON Tokens │ TOON (ms) │ Savings (%) │ Auto Choice │
 ├─────────┼─────────────────────────────────────────────────────┼─────────────┼───────────┼─────────────┼───────────┼─────────────┼─────────────┤
-│ 0       │ 'Small Context (1 Task, 3 Decisions, 5 Facts)'      │ 641         │ '9.02'    │ 607         │ '2.28'    │ '5.3%'      │ 'TOON'      │
-│ 1       │ 'Medium Context (10 Tasks, 20 Decisions, 25 Facts)' │ 2893        │ '5.73'    │ 2570        │ '4.78'    │ '11.2%'     │ 'TOON'      │
-│ 2       │ 'Large Context (35 Tasks, 60 Decisions, 70 Facts)'  │ 7601        │ '10.51'   │ 6781        │ '7.32'    │ '10.8%'     │ 'TOON'      │
+│ 0       │ 'Small Context (1 Task, 3 Decisions, 5 Facts)'      │ 639         │ '15.42'   │ 669         │ '1.73'    │ '-4.7%'     │ 'JSON'      │
+│ 1       │ 'Medium Context (10 Tasks, 20 Decisions, 25 Facts)' │ 3006        │ '4.82'    │ 2957        │ '5.92'    │ '1.6%'      │ 'TOON'      │
+│ 2       │ 'Large Context (35 Tasks, 60 Decisions, 70 Facts)'  │ 7886        │ '21.01'   │ 7762        │ '8.16'    │ '1.6%'      │ 'TOON'      │
 └─────────┴─────────────────────────────────────────────────────┴─────────────┴───────────┴─────────────┴───────────┴─────────────┴─────────────┘
 ```
 
@@ -319,12 +320,13 @@ npm test
 ✔ API: health check returns ok
 ✔ API: resolve project and checkpoint workflow
 ✔ API: authentication middleware enforces token check on protected routes
+✔ API: multi-tenant isolation prevents cross-organization access
 ✔ Git inspector reports repo state safely
 ✔ Config manager saves and loads .ctx/config.json
 ✔ MCP Server initializes with all core tools registered
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-12 passed, 0 failed
+13 passed, 0 failed
 ```
 
 ---

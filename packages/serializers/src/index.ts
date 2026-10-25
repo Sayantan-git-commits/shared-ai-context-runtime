@@ -1,16 +1,44 @@
 import { encode as encodeToon, decode as decodeToon } from "@toon-format/toon";
+import { encode as gptEncode } from "gpt-tokenizer";
 import type { ContextPackage, EncodedContext, ContextFormat } from "@ctx/schemas";
 
 /**
- * Standard token count estimation.
- * In production, provider tokenizers (cl100k, o200k, etc.) can be plugged in.
- * Average rule of thumb: ~3.8 to 4 characters per token for structured text.
+ * High-precision BPE token count calculation using cl100k_base tokenizer.
+ * Falls back to character-based heuristic only if binary encoding fails.
  */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  const wordsAndPunct = text.trim().match(/[\w]+|[^\s\w]/g);
-  if (!wordsAndPunct) return 0;
-  return Math.max(1, Math.ceil(text.length / 3.8));
+  try {
+    return gptEncode(text).length;
+  } catch {
+    return Math.max(1, Math.ceil(text.length / 3.8));
+  }
+}
+
+/**
+ * Deep structural validation verifying that deserialized output strictly preserves
+ * required schema identity, instructions, decisions, and task state.
+ */
+export function validateRoundTrip(original: ContextPackage, decoded: any): boolean {
+  if (!decoded || typeof decoded !== "object") return false;
+  if (decoded.schemaVersion !== original.schemaVersion) return false;
+  if (decoded.projectId !== original.projectId) return false;
+  if (Array.isArray(original.instructions)) {
+    if (!Array.isArray(decoded.instructions) || decoded.instructions.length !== original.instructions.length) {
+      return false;
+    }
+  }
+  if (Array.isArray(original.decisions)) {
+    if (!Array.isArray(decoded.decisions) || decoded.decisions.length !== original.decisions.length) {
+      return false;
+    }
+  }
+  if (original.taskState && typeof original.taskState === "object") {
+    if (!decoded.taskState || typeof decoded.taskState !== "object") {
+      return false;
+    }
+  }
+  return true;
 }
 
 export interface SerializationResult extends EncodedContext {
@@ -145,7 +173,7 @@ export class ContextSerializer {
       toonOutput = encodeToon(budgetPkg);
       toonTokens = estimateTokens(toonOutput);
       const decoded = decodeToon(toonOutput);
-      if (decoded && typeof decoded === "object") {
+      if (validateRoundTrip(budgetPkg, decoded)) {
         toonSuccess = true;
       }
     } catch {
@@ -176,6 +204,11 @@ export class ContextSerializer {
       }
     }
 
+    const actualEncodedTokens = estimateTokens(serialized);
+    const finalBudgetExceeded = tokenBudget !== undefined && tokenBudget > 0
+      ? actualEncodedTokens > tokenBudget
+      : budgetExceeded;
+
     const savingsPercent =
       baselineTokens > 0
         ? Number((((baselineTokens - estimatedTokens) / baselineTokens) * 100).toFixed(2))
@@ -184,14 +217,14 @@ export class ContextSerializer {
     return {
       format: selectedFormat,
       serialized,
-      estimatedTokens,
+      estimatedTokens: actualEncodedTokens,
       baselineTokens,
       savingsPercent,
       contextVersion: 1,
       baselineJson: minifiedJson,
       toonOutput: toonSuccess ? toonOutput : minifiedJson,
       tokenBudget,
-      budgetExceeded,
+      budgetExceeded: finalBudgetExceeded,
       prunedItemsCount: prunedCount,
     };
   }

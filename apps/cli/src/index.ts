@@ -14,25 +14,27 @@ program
   .description("Shared AI Context Runtime — cross-client, cross-device project memory")
   .version("0.1.0");
 
-function resolveClient(apiOverride?: string): CtxApiClient {
-  const config = loadLocalConfig();
+function resolveClient(apiOverride?: string, cwd: string = process.cwd()): CtxApiClient {
+  const config = loadLocalConfig(cwd);
   const url = apiOverride || config?.api_base_url || process.env.CTX_API_URL || "http://127.0.0.1:3000";
-  return new CtxApiClient(url);
+  return new CtxApiClient(url, (config as any)?.auth_token || process.env.CTX_AUTH_TOKEN);
 }
 
 // 1. ctx init
 program
-  .command("init")
+  .command("init [projectPath]")
   .description("Initialize project identity and local .ctx configuration")
   .option("-n, --name <name>", "Project name override")
   .option("--api <url>", "Context API base URL", "http://127.0.0.1:3000")
-  .action(async (options) => {
-    const cwd = process.cwd();
+  .action(async (projectPathArg, optionsArg) => {
+    const projectPath = typeof projectPathArg === "string" ? projectPathArg : undefined;
+    const options = typeof projectPathArg === "object" ? projectPathArg : optionsArg;
+    const cwd = projectPath ? path.resolve(projectPath) : process.cwd();
     const gitState = inspectGit(cwd);
     const projectName = options.name || path.basename(cwd);
 
     console.log(`Resolving project identity for: ${projectName}`);
-    const client = resolveClient(options.api);
+    const client = resolveClient(options.api, cwd);
 
     try {
       const project = await client.resolveProject(projectName, gitState.remoteUrl || undefined);
@@ -60,18 +62,18 @@ program
 
 // 2. ctx status
 program
-  .command("status")
+  .command("status [projectPath]")
   .description("Display project status, latest checkpoint, and current git state")
-  .action(async () => {
-    const cwd = process.cwd();
+  .action(async (projectPathArg) => {
+    const cwd = projectPathArg ? path.resolve(projectPathArg) : process.cwd();
     const config = loadLocalConfig(cwd);
     if (!config) {
-      console.error("No .ctx configuration found. Run 'ctx init' first.");
+      console.error(`No .ctx configuration found at ${cwd}. Run 'ctx init' first.`);
       process.exit(1);
     }
 
     const gitState = inspectGit(cwd);
-    const client = resolveClient();
+    const client = resolveClient(undefined, cwd);
 
     try {
       const checkpoint = await client.getLatestCheckpoint(config.project_id);
@@ -99,20 +101,22 @@ program
 
 // 3. ctx checkpoint
 program
-  .command("checkpoint")
+  .command("checkpoint [projectPath]")
   .description("Create a checkpoint recording the current verified project state")
   .option("-m, --message <message>", "Description or next action")
   .option("--task <taskId>", "Associated task ID")
-  .action(async (options) => {
-    const cwd = process.cwd();
+  .action(async (projectPathArg, optionsArg) => {
+    const projectPath = typeof projectPathArg === "string" ? projectPathArg : undefined;
+    const options = typeof projectPathArg === "object" ? projectPathArg : optionsArg;
+    const cwd = projectPath ? path.resolve(projectPath) : process.cwd();
     const config = loadLocalConfig(cwd);
     if (!config) {
-      console.error("No .ctx configuration found. Run 'ctx init' first.");
+      console.error(`No .ctx configuration found at ${cwd}. Run 'ctx init' first.`);
       process.exit(1);
     }
 
     const gitState = inspectGit(cwd);
-    const client = resolveClient();
+    const client = resolveClient(undefined, cwd);
 
     try {
       const nextAction = options.message || "Continue from current state";
@@ -164,7 +168,7 @@ program
     }
 
     const gitState = inspectGit(cwd);
-    const client = resolveClient();
+    const client = resolveClient(undefined, cwd);
 
     try {
       const checkpoint = await client.getLatestCheckpoint(config.project_id);
@@ -183,19 +187,22 @@ program
       const hasDrift = isBranchDrift || isCommitDrift || isDirtyDrift;
 
       if (hasDrift) {
-        console.log("⚠️  GIT DRIFT DETECTED:");
+        console.error("⚠️  CRITICAL GIT DRIFT DETECTED:");
         if (isBranchDrift) {
-          console.log(`   • Branch changed: checkpoint was on '${checkpoint.branch}', current is '${gitState.branch}'`);
+          console.error(`   • Branch changed: checkpoint was on '${checkpoint.branch}', current is '${gitState.branch}'`);
         }
         if (isCommitDrift) {
-          console.log(`   • Commit changed: checkpoint commit ${checkpoint.gitCommit?.slice(0, 7)}, current HEAD ${gitState.headCommit?.slice(0, 7)}`);
+          console.error(`   • Commit changed: checkpoint commit ${checkpoint.gitCommit?.slice(0, 7)}, current HEAD ${gitState.headCommit?.slice(0, 7)}`);
         }
         if (isDirtyDrift) {
-          console.log(`   • Working tree status changed: checkpoint was ${checkpoint.workingTree.clean ? "clean" : "dirty"}, current is ${gitState.workingTree.clean ? "clean" : "dirty"}`);
+          console.error(`   • Working tree status changed: checkpoint was ${checkpoint.workingTree.clean ? "clean" : "dirty"}, current is ${gitState.workingTree.clean ? "clean" : "dirty"}`);
         }
-        if (!options.ignoreDrift && isBranchDrift) {
-          console.log("\n[Notice] Resuming across branches may cause conflicting agent edits.");
-          console.log("         Use --ignore-drift to suppress this warning.\n");
+        if (!options.ignoreDrift) {
+          console.error("\n[SAFETY GATE TRIGGERED] Context resume halted to prevent state contamination across divergent branches or dirty working trees.");
+          console.error("                       To override this safety check, run with: ctx continue --ignore-drift\n");
+          process.exit(1);
+        } else {
+          console.warn("\n[SAFETY OVERRIDE] Proceeding with resume despite detected Git drift (--ignore-drift specified).\n");
         }
       }
 
@@ -426,4 +433,38 @@ program
     console.log("\nDiagnostics complete.");
   });
 
-program.parse(process.argv);
+export function normalizeArgv(argv: string[]): string[] {
+  if (argv.length < 4) return argv;
+  const firstArg = argv[2];
+  const knownCommands = [
+    "init",
+    "status",
+    "checkpoint",
+    "continue",
+    "history",
+    "events",
+    "memory",
+    "doctor",
+    "--help",
+    "-h",
+    "--version",
+    "-v",
+  ];
+
+  if (!knownCommands.includes(firstArg)) {
+    // If firstArg is a directory or path:
+    // e.g. ctx /path/to/project continue
+    const isPathLike =
+      firstArg.includes("/") ||
+      firstArg.includes("\\") ||
+      firstArg.startsWith(".") ||
+      path.isAbsolute(firstArg);
+    const subcommand = argv[3];
+    if (isPathLike && knownCommands.includes(subcommand)) {
+      return [argv[0], argv[1], subcommand, firstArg, ...argv.slice(4)];
+    }
+  }
+  return argv;
+}
+
+program.parse(normalizeArgv(process.argv));

@@ -234,3 +234,73 @@ test("API: authentication middleware enforces token check on protected routes", 
   });
   assert.equal(validApiKeyRes.statusCode, 200);
 });
+
+test("API: multi-tenant isolation prevents cross-organization access", async () => {
+  const orgAToken = "token-tenant-a";
+  const orgBToken = "token-tenant-b";
+  const orgAId = "00000000-0000-0000-0000-00000000000a";
+  const orgBId = "00000000-0000-0000-0000-00000000000b";
+
+  const app = buildServer({
+    authTokens: {
+      [orgAToken]: orgAId,
+      [orgBToken]: orgBId,
+    },
+  });
+
+  // 1. Tenant A resolves project A
+  const projARes = await app.inject({
+    method: "POST",
+    url: "/v1/projects/resolve",
+    headers: { authorization: `Bearer ${orgAToken}` },
+    payload: { projectName: "tenant-a-private-repo" },
+  });
+  assert.equal(projARes.statusCode, 200);
+  const projA = projARes.json();
+  assert.equal(projA.organizationId, orgAId);
+
+  // 2. Tenant A creates a task in Project A
+  const taskARes = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projA.id}/tasks`,
+    headers: { authorization: `Bearer ${orgAToken}` },
+    payload: { title: "Confidential Tenant A Feature" },
+  });
+  assert.equal(taskARes.statusCode, 201);
+  const taskA = taskARes.json();
+
+  // 3. Tenant B attempts to read Project A -> 403 Forbidden
+  const forbiddenProjRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${projA.id}`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+  });
+  assert.equal(forbiddenProjRes.statusCode, 403);
+  const forbiddenProjJson = forbiddenProjRes.json();
+  assert.equal(forbiddenProjJson.error, "Forbidden");
+
+  // 4. Tenant B attempts to list tasks of Project A -> 403 Forbidden
+  const forbiddenTasksRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${projA.id}/tasks`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+  });
+  assert.equal(forbiddenTasksRes.statusCode, 403);
+
+  // 5. Tenant B attempts to access Tenant A's task -> 403 Forbidden
+  const forbiddenTaskRes = await app.inject({
+    method: "GET",
+    url: `/v1/tasks/${taskA.id}`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+  });
+  assert.equal(forbiddenTaskRes.statusCode, 403);
+
+  // 6. Tenant B attempts to acquire lease on Tenant A's task -> 403 Forbidden
+  const forbiddenLeaseRes = await app.inject({
+    method: "POST",
+    url: `/v1/tasks/${taskA.id}/lease/acquire`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+    payload: { agentId: "agent-malicious", durationSeconds: 30 },
+  });
+  assert.equal(forbiddenLeaseRes.statusCode, 403);
+});
