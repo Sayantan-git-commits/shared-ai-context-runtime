@@ -8,8 +8,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-24+-green.svg?logo=node.js)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22_LTS_(20+-24)-green.svg?logo=node.js)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
+[![CI Matrix](https://img.shields.io/badge/CI_Matrix-Node_20%20%7C%2022%20%7C%2024-green.svg)](ci/github-ci.yml)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
 [![Tests](https://img.shields.io/badge/Tests-Passing_25%2F25-brightgreen.svg)]()
@@ -140,7 +141,7 @@ shared-ai-context-runtime/
 
 ### Prerequisites
 
-- **Node.js** v20+ (tested on Node v24)
+- **Node.js** v22 LTS (Active LTS pinned in Docker; Node v20+ and v24 also supported in CI matrix)
 - **PostgreSQL 17** (or local portable binary)
 - **Git**
 
@@ -291,12 +292,22 @@ npm run benchmark
 
 ---
 
-## 🐳 Docker Deployment
+## 🐳 Docker Deployment & Smoke Verification
 
-Run the complete production stack (PostgreSQL 17 + Fastify API Gateway) with a single command:
+Run the complete production stack (PostgreSQL 17.4 + transactional migration runner + Fastify API Gateway) with Docker Compose:
 
 ```bash
-docker compose up -d
+# 1. Start all services in the background
+docker compose up --build -d
+
+# 2. Check service status (ctx-migrate will complete, ctx-api will become healthy)
+docker compose ps
+
+# 3. Verify API readiness endpoint
+curl -f http://127.0.0.1:3000/health
+
+# 4. View logs
+docker compose logs --tail=100
 ```
 
 With optional API key authentication:

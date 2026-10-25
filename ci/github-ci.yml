@@ -1,0 +1,82 @@
+name: CI & Release Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build & Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x, 24.x]
+
+    services:
+      postgres:
+        image: postgres:17.4-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ctx_password
+          POSTGRES_DB: ctx_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ctx_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build monorepo workspaces
+        run: npm run build
+
+      - name: Run unit & integration tests
+        run: npm test
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://postgres:ctx_password@127.0.0.1:5432/ctx_db
+        run: npm run migrate
+
+      - name: Run serialization benchmarks
+        run: npm run benchmark
+
+  docker-smoke:
+    name: Container Build & Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker Compose Config
+        run: docker compose config
+
+      - name: Build container images
+        run: docker compose build
+
+      - name: Start services with Docker Compose
+        run: docker compose up -d
+
+      - name: Wait for services and verify health
+        run: |
+          sleep 12
+          docker compose ps
+          curl --fail --retry 10 --retry-delay 2 http://127.0.0.1:3000/health
+
+      - name: Teardown
+        run: docker compose down -v
