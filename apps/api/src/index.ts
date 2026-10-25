@@ -4,9 +4,14 @@ import { PostgresContextStore, MemoryContextStore } from "./store.js";
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "127.0.0.1";
 
-if (process.env.NODE_ENV === "production" && !process.env.DATABASE_URL) {
-  console.error("FATAL: DATABASE_URL is required in production mode. Ephemeral MemoryContextStore is prohibited.");
-  process.exit(1);
+if (!process.env.DATABASE_URL) {
+  if (process.env.CTX_STORE !== "memory") {
+    console.error("FATAL: DATABASE_URL is required for durable persistence.");
+    console.error("Set DATABASE_URL=postgresql://user:pass@host:5432/ctx_db");
+    console.error("For ephemeral in-memory test mode only, explicitly pass CTX_STORE=memory.");
+    process.exit(1);
+  }
+  console.warn("[WARN] Starting with ephemeral in-memory store (CTX_STORE=memory). All checkpoints will be lost on exit.");
 }
 
 const store = process.env.DATABASE_URL

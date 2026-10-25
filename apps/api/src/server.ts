@@ -26,6 +26,7 @@ export interface ServerOptions {
   authTokens?: Record<string, string>;
   allowedOrigins?: string[] | boolean;
   enableRateLimit?: boolean;
+  allowAnonymous?: boolean;
 }
 
 function parseAuthTokens(raw?: string): Record<string, string> {
@@ -51,10 +52,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   const store = options.store || new MemoryContextStore();
   const serializer = new ContextSerializer();
 
-  // CORS Configuration
+  // CORS Configuration: Restricted to explicit trusted origins by default
+  const defaultAllowedOrigins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+  ];
   const allowedOrigins = options.allowedOrigins !== undefined
     ? options.allowedOrigins
-    : (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim()) : true);
+    : (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim()) : defaultAllowedOrigins);
   server.register(cors, { origin: allowedOrigins });
 
   if (options.enableRateLimit) {
@@ -94,6 +100,12 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
           message: "Valid Bearer token or x-api-key header required",
         });
       }
+    } else if (!options.allowAnonymous) {
+      // In all default modes, unauthenticated requests are rejected with 401
+      return reply.status(401).send({
+        error: "Unauthorized",
+        message: "Authentication is required. Provide valid Bearer token or x-api-key header",
+      });
     }
 
     (request as any).principal = {
@@ -385,12 +397,50 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const memories = await store.listMemories(projectId);
     const recentEvents = await store.listEvents(projectId, taskId);
 
-    // Group memories
+    // 1. Task-relevance memory ranking (prioritize task-linked and keyword-matching memories)
+    const taskKeywords = [
+      ...(task?.title?.toLowerCase().split(/\s+/) || []),
+      ...(task?.nextAction?.toLowerCase().split(/\s+/) || []),
+    ].filter((w) => w.length > 3);
+
+    const scoredMemories = memories.map((mem) => {
+      let score = 0;
+      if (task && (mem.structuredContent as any)?.taskId === task.id) score += 50;
+      const titleLower = mem.title.toLowerCase();
+      for (const kw of taskKeywords) {
+        if (titleLower.includes(kw)) score += 10;
+      }
+      return { mem, score };
+    });
+
+    scoredMemories.sort((a, b) => b.score - a.score);
+    const topMemories = scoredMemories.slice(0, 15).map((s) => s.mem);
+
     const facts: Record<string, unknown> = {};
     const decisions: Array<Record<string, unknown>> = [];
-    for (const mem of memories) {
+    for (const mem of topMemories) {
       if (mem.type === "fact") facts[mem.title] = mem.content;
       if (mem.type === "decision") decisions.push({ title: mem.title, content: mem.content });
+    }
+
+    // 2. Establish whether live repository state matches checkpoint state
+    let gitDriftDetected = false;
+    const instructions: string[] = [
+      "Resume task from the verified checkpoint below.",
+      "Ensure git working tree and tests pass before concluding.",
+    ];
+
+    if (checkpoint && parse.data.currentGitState) {
+      const cur = parse.data.currentGitState as any;
+      const isBranchDrift = cur.branch && checkpoint.branch !== cur.branch;
+      const isCommitDrift = cur.headCommit && checkpoint.gitCommit && checkpoint.gitCommit !== cur.headCommit;
+      const isCleanDrift = cur.clean !== undefined && checkpoint.workingTree.clean !== cur.clean;
+      if (isBranchDrift || isCommitDrift || isCleanDrift) {
+        gitDriftDetected = true;
+        instructions.unshift(
+          `[REPO DRIFT WARNING] Working tree has diverged from checkpoint (checkpoint was branch '${checkpoint.branch}', commit '${checkpoint.gitCommit?.slice(0, 7) || "none"}'). Inspect diff before changes.`
+        );
+      }
     }
 
     // Assemble ContextPackage
@@ -400,10 +450,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       projectName: project.name,
       taskId: task?.id,
       checkpointVersion: checkpoint?.version,
-      instructions: [
-        "Resume task from the verified checkpoint below.",
-        "Ensure git working tree and tests pass before concluding.",
-      ],
+      instructions,
       facts,
       decisions,
       taskState: {
@@ -447,6 +494,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
         tokenBudget: parse.data.tokenBudget,
         budgetExceeded: serialization.budgetExceeded,
         prunedItemsCount: serialization.prunedItemsCount,
+        gitDriftDetected,
       },
     });
 
@@ -463,6 +511,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       tokenBudget: parse.data.tokenBudget,
       budgetExceeded: serialization.budgetExceeded,
       prunedItemsCount: serialization.prunedItemsCount,
+      gitDriftDetected,
       sources: checkpoint ? [{ type: "checkpoint", id: checkpoint.id }] : [],
     });
   });

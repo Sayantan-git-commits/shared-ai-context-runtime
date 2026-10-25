@@ -10,7 +10,7 @@ import {
 import type { ContextPackage } from "../../packages/schemas/dist/index.js";
 
 test("E2E: Full cross-client handoff workflow (Tool A -> Tool B)", async () => {
-  const app = buildServer();
+  const app = buildServer({ allowAnonymous: true });
 
   // 1. Resolve project
   const resolveRes = await app.inject({

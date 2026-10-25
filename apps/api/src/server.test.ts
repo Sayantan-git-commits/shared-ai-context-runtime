@@ -14,7 +14,7 @@ test("API: health check returns ok", async () => {
 });
 
 test("API: resolve project and checkpoint workflow", async () => {
-  const app = buildServer();
+  const app = buildServer({ allowAnonymous: true });
 
   // 1. Resolve project
   const projRes = await app.inject({
@@ -339,7 +339,7 @@ test("API: multi-tenant isolation prevents cross-organization access", async () 
 });
 
 test("API: concurrent checkpoint creation maintains atomic version sequence", async () => {
-  const app = buildServer();
+  const app = buildServer({ allowAnonymous: true });
 
   // 1. Resolve project
   const projRes = await app.inject({

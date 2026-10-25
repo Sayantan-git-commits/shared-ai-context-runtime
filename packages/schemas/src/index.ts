@@ -119,6 +119,7 @@ export const WorkingTreeSummarySchema = z.object({
   changedPaths: z.array(z.string()).default([]),
   untrackedPaths: z.array(z.string()).default([]),
   diffSummary: z.string().optional(),
+  diffPatch: z.string().optional(),
 });
 export type WorkingTreeSummary = z.infer<typeof WorkingTreeSummarySchema>;
 
@@ -282,6 +283,7 @@ export const AssembleContextRequestSchema = z.object({
   modelId: z.string().optional(),
   formatPreference: z.enum(["auto", "toon", "json"]).default("auto"),
   tokenBudget: z.number().int().positive().default(8000),
+  currentGitState: z.record(z.unknown()).optional(),
 });
 export type AssembleContextRequest = z.input<typeof AssembleContextRequestSchema>;
 
@@ -298,6 +300,7 @@ export const AssembleContextResponseSchema = z.object({
   tokenBudget: z.number().int().optional(),
   budgetExceeded: z.boolean().default(false),
   prunedItemsCount: z.number().int().default(0),
+  gitDriftDetected: z.boolean().default(false),
   sources: z.array(z.object({
     type: z.string(),
     id: z.string(),

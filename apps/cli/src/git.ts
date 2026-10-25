@@ -69,6 +69,19 @@ export function inspectGit(cwd: string = process.cwd()): GitRepoState {
     // Ignore error
   }
 
+  // Capture in-progress git diff patch (capped at 25KB for safety)
+  let diffPatch: string | undefined = undefined;
+  let diffSummary: string | undefined = undefined;
+  try {
+    const rawDiff = execSync("git diff HEAD", { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 1024 * 512 });
+    if (rawDiff.trim().length > 0) {
+      diffPatch = rawDiff.length > 25000 ? rawDiff.slice(0, 25000) + "\n... [diff truncated for length]" : rawDiff;
+      diffSummary = `${changedPaths.length} modified files, ${diffPatch.split("\n").length} diff lines`;
+    }
+  } catch {
+    // Diff unavailable
+  }
+
   return {
     isGitRepo: true,
     branch: branch || "main",
@@ -79,6 +92,8 @@ export function inspectGit(cwd: string = process.cwd()): GitRepoState {
       branch: branch || "main",
       changedPaths,
       untrackedPaths,
+      diffSummary,
+      diffPatch,
     },
   };
 }

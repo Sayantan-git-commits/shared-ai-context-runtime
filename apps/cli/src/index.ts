@@ -213,6 +213,12 @@ program
         formatPreference: (options.format as any) || "auto",
         clientType: options.client || "generic",
         tokenBudget,
+        currentGitState: {
+          branch: gitState.branch,
+          headCommit: gitState.headCommit,
+          clean: gitState.workingTree.clean,
+          changedPaths: gitState.workingTree.changedPaths,
+        },
       });
 
       // Prepare client adapter handoff
