@@ -3,10 +3,12 @@ import { z } from "zod";
 
 export interface McpServerConfig {
   apiBaseUrl?: string;
+  authToken?: string;
 }
 
 export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
   const baseUrl = (config.apiBaseUrl || process.env.CTX_API_URL || "http://127.0.0.1:3000").replace(/\/+$/, "");
+  const authToken = config.authToken || process.env.CTX_AUTH_TOKEN;
 
   const server = new McpServer({
     name: "ctx-context-runtime",
@@ -19,6 +21,7 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
       ...options,
       headers: {
         "Content-Type": "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         ...(options.headers || {}),
       },
     });
@@ -402,6 +405,103 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error listing events: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // 10. ctx_search_memory
+  server.tool(
+    "ctx_search_memory",
+    "Search persistent project facts, architectural decisions, and conventions using full-text search",
+    {
+      projectId: z.string().uuid().describe("Unique project UUID"),
+      query: z.string().describe("Search keywords or query"),
+      limit: z.number().int().default(10).describe("Maximum results to return"),
+    },
+    async ({ projectId, query, limit }) => {
+      try {
+        const results = await apiFetch<any[]>(
+          `/v1/projects/${projectId}/memories/search?q=${encodeURIComponent(query)}&limit=${limit}`
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(results, null, 2),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error searching memories: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // 11. ctx_acquire_task_lease
+  server.tool(
+    "ctx_acquire_task_lease",
+    "Acquire an exclusive time-limited lease on a task to prevent concurrent agent conflicts",
+    {
+      taskId: z.string().uuid().describe("Unique task UUID"),
+      agentId: z.string().describe("Identifier for the active agent or session"),
+      durationSeconds: z.number().int().default(300).describe("Lease duration in seconds (default 300)"),
+    },
+    async ({ taskId, agentId, durationSeconds }) => {
+      try {
+        const result = await apiFetch<any>(`/v1/tasks/${taskId}/lease/acquire`, {
+          method: "POST",
+          body: JSON.stringify({ agentId, durationSeconds }),
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✓ Lease acquired by ${agentId} until ${result.task.leaseExpiresAt}. Token: ${result.leaseToken}`,
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error acquiring lease: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // 12. ctx_release_task_lease
+  server.tool(
+    "ctx_release_task_lease",
+    "Release an exclusive task lease using the secret lease token",
+    {
+      taskId: z.string().uuid().describe("Unique task UUID"),
+      leaseToken: z.string().describe("Secret token received upon lease acquisition"),
+    },
+    async ({ taskId, leaseToken }) => {
+      try {
+        const task = await apiFetch<any>(`/v1/tasks/${taskId}/lease/release`, {
+          method: "POST",
+          body: JSON.stringify({ leaseToken }),
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✓ Lease released for task "${task.title}". Task is now unlocked.`,
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error releasing lease: ${err.message}` }],
           isError: true,
         };
       }

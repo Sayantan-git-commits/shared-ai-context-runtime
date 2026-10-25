@@ -10,6 +10,7 @@ import type {
   CreateCheckpointInput,
   MemoryEntry,
   MemoryType,
+  SearchMemoryResult,
   AgentEvent,
   CreateAgentEventInput,
 } from "@ctx/schemas";
@@ -33,8 +34,11 @@ export interface ContextStore {
   listCheckpoints(projectId: string): Promise<Checkpoint[]>;
   createMemory(entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt">): Promise<MemoryEntry>;
   listMemories(projectId: string, type?: MemoryType): Promise<MemoryEntry[]>;
+  searchMemories(projectId: string, query: string, limit?: number): Promise<SearchMemoryResult[]>;
   recordEvent(input: CreateAgentEventInput): Promise<AgentEvent>;
   listEvents(projectId: string, taskId?: string): Promise<AgentEvent[]>;
+  acquireTaskLease(taskId: string, agentId: string, durationSeconds?: number): Promise<{ task: Task; leaseToken: string }>;
+  releaseTaskLease(taskId: string, leaseToken: string): Promise<Task>;
 }
 
 export class MemoryContextStore implements ContextStore {
@@ -202,6 +206,82 @@ export class MemoryContextStore implements ContextStore {
   public async listEvents(projectId: string, taskId?: string): Promise<AgentEvent[]> {
     const list = this.events.get(projectId) || [];
     return list.filter((e) => !taskId || e.taskId === taskId).reverse();
+  }
+
+  public async searchMemories(
+    projectId: string,
+    query: string,
+    limit: number = 10
+  ): Promise<SearchMemoryResult[]> {
+    const list = this.memories.get(projectId) || [];
+    const lowerQ = query.toLowerCase().split(/\s+/).filter(Boolean);
+
+    const scored = list
+      .filter((m) => !m.isDeleted)
+      .map((m) => {
+        const text = `${m.title} ${m.content}`.toLowerCase();
+        let matches = 0;
+        for (const word of lowerQ) {
+          if (text.includes(word)) matches++;
+        }
+        return { ...m, rank: matches / (lowerQ.length || 1) };
+      })
+      .filter((m) => (m.rank || 0) > 0)
+      .sort((a, b) => (b.rank || 0) - (a.rank || 0))
+      .slice(0, limit);
+
+    return scored;
+  }
+
+  public async acquireTaskLease(
+    taskId: string,
+    agentId: string,
+    durationSeconds: number = 300
+  ): Promise<{ task: Task; leaseToken: string }> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+
+    const now = new Date();
+    if (
+      task.leaseExpiresAt &&
+      new Date(task.leaseExpiresAt) > now &&
+      task.leaseAgentId !== agentId
+    ) {
+      throw new ConflictError(
+        `Task is currently leased by agent ${task.leaseAgentId} until ${task.leaseExpiresAt}`
+      );
+    }
+
+    const leaseToken = randomUUID();
+    const leaseExpiresAt = new Date(Date.now() + durationSeconds * 1000).toISOString();
+    const updated: Task = {
+      ...task,
+      leaseToken,
+      leaseAgentId: agentId,
+      leaseExpiresAt,
+      updatedAt: new Date().toISOString(),
+    };
+    this.tasks.set(taskId, updated);
+    return { task: updated, leaseToken };
+  }
+
+  public async releaseTaskLease(taskId: string, leaseToken: string): Promise<Task> {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+
+    if (task.leaseToken !== leaseToken) {
+      throw new ConflictError("Invalid or expired lease token");
+    }
+
+    const updated: Task = {
+      ...task,
+      leaseToken: null,
+      leaseAgentId: null,
+      leaseExpiresAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+    this.tasks.set(taskId, updated);
+    return updated;
   }
 }
 
@@ -428,6 +508,74 @@ export class PostgresContextStore implements ContextStore {
     return res.rows.map((r: any) => this.mapEvent(r));
   }
 
+  public async searchMemories(
+    projectId: string,
+    query: string,
+    limit: number = 10
+  ): Promise<SearchMemoryResult[]> {
+    const sql = `
+      SELECT *,
+             ts_rank(to_tsvector('english', title || ' ' || content), plainto_tsquery('english', $2)) AS rank
+      FROM memory_entries
+      WHERE project_id = $1
+        AND is_deleted = false
+        AND to_tsvector('english', title || ' ' || content) @@ plainto_tsquery('english', $2)
+      ORDER BY rank DESC
+      LIMIT $3
+    `;
+    const res = await this.pool.query(sql, [projectId, query, limit]);
+    return res.rows.map((r: any) => ({
+      ...this.mapMemory(r),
+      rank: Number(r.rank || 0),
+    }));
+  }
+
+  public async acquireTaskLease(
+    taskId: string,
+    agentId: string,
+    durationSeconds: number = 300
+  ): Promise<{ task: Task; leaseToken: string }> {
+    const leaseToken = randomUUID();
+    const sql = `
+      UPDATE tasks
+      SET lease_expires_at = NOW() + ($2 || ' seconds')::INTERVAL,
+          lease_token = $3,
+          lease_agent_id = $4,
+          updated_at = NOW()
+      WHERE id = $1
+        AND (lease_expires_at IS NULL OR lease_expires_at <= NOW() OR lease_agent_id = $4)
+      RETURNING *
+    `;
+    const res = await this.pool.query(sql, [taskId, durationSeconds, leaseToken, agentId]);
+    if (res.rows.length === 0) {
+      const existing = await this.getTask(taskId);
+      if (!existing) throw new Error(`Task ${taskId} not found`);
+      throw new ConflictError(
+        `Task is currently leased by agent ${existing.leaseAgentId} until ${existing.leaseExpiresAt}`
+      );
+    }
+    return { task: this.mapTask(res.rows[0]), leaseToken };
+  }
+
+  public async releaseTaskLease(taskId: string, leaseToken: string): Promise<Task> {
+    const sql = `
+      UPDATE tasks
+      SET lease_expires_at = NULL,
+          lease_token = NULL,
+          lease_agent_id = NULL,
+          updated_at = NOW()
+      WHERE id = $1 AND lease_token = $2
+      RETURNING *
+    `;
+    const res = await this.pool.query(sql, [taskId, leaseToken]);
+    if (res.rows.length === 0) {
+      const existing = await this.getTask(taskId);
+      if (!existing) throw new Error(`Task ${taskId} not found`);
+      throw new ConflictError("Invalid or expired lease token");
+    }
+    return this.mapTask(res.rows[0]);
+  }
+
   private mapEvent(row: any): AgentEvent {
     return {
       id: row.id,
@@ -468,6 +616,9 @@ export class PostgresContextStore implements ContextStore {
       createdAt: row.created_at.toISOString(),
       updatedAt: row.updated_at.toISOString(),
       completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+      leaseExpiresAt: row.lease_expires_at ? row.lease_expires_at.toISOString() : null,
+      leaseToken: row.lease_token || null,
+      leaseAgentId: row.lease_agent_id || null,
     };
   }
 

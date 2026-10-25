@@ -1,0 +1,8 @@
+node_modules
+.git
+.ctx
+.pgsql_data
+pgsql
+dist
+*.log
+.DS_Store

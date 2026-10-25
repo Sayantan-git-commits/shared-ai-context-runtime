@@ -8,7 +8,11 @@ const store = process.env.DATABASE_URL
   ? new PostgresContextStore(process.env.DATABASE_URL)
   : new MemoryContextStore();
 
-const server = buildServer({ store });
+const server = buildServer({
+  store,
+  authToken: process.env.CTX_AUTH_TOKEN,
+  enableRateLimit: process.env.ENABLE_RATE_LIMIT === "true" || process.env.NODE_ENV === "production",
+});
 
 server.listen({ port, host }, (err, address) => {
   if (err) {

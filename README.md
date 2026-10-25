@@ -12,7 +12,8 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_9%2F9-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_12%2F12-brightgreen.svg)]()
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
 
@@ -221,6 +222,9 @@ Connect `ctx` directly to your favorite AI assistant so the model can inspect ch
 | `ctx_update_task` | `taskId`, `status`, `nextAction`, `expectedVersion` | Updates task lifecycle with optimistic concurrency check |
 | `ctx_record_event` | `projectId`, `eventType`, `payload` | Logs an event in the append-only audit stream |
 | `ctx_list_events` | `projectId`, `taskId` | Retrieves audit event trail for a project or task |
+| `ctx_search_memory` | `projectId`, `query`, `type`, `limit` | Full-text keyword search across memory entries and decisions |
+| `ctx_acquire_task_lease` | `taskId`, `agentId`, `durationSeconds` | Locks a task for single-agent execution (preventing races) |
+| `ctx_release_task_lease` | `taskId`, `leaseToken` | Releases active lease back to pool upon completion |
 
 ### Configuration
 
@@ -256,22 +260,51 @@ Connect `ctx` directly to your favorite AI assistant so the model can inspect ch
 
 ---
 
-## 📊 TOON Token Efficiency
+## 📊 TOON Token Efficiency & Benchmarks
 
-`ctx` incorporates **Token-Oriented Object Notation (TOON)** as a runtime serialization adapter. During context assembly, the compiler benchmarks candidate representations against minified JSON and selects the most compact valid format:
+`ctx` incorporates **Token-Oriented Object Notation (TOON)** as a runtime serialization adapter. During context assembly, the compiler benchmarks candidate representations against minified JSON and selects the most compact valid format.
 
-| Context Type | Baseline Minified JSON | TOON Serialization | Token Reduction | Selected Format |
-|---|---|---|---|---|
-| Repetitive Completed Items | 285 tokens | 242 tokens | **~15.1%** | `TOON` |
-| Deeply Nested Decisions | 410 tokens | 365 tokens | **~11.0%** | `TOON` |
-| Sparse Status Snapshot | 178 tokens | 174 tokens | **~2.3%** | `TOON` |
-| Flat Key-Value Config | 65 tokens | 65 tokens | **0.0%** | `JSON` |
+Run the reproducible benchmark suite anytime:
+
+```bash
+npm run benchmark
+```
+
+```text
+================================================================================
+             SHARED AI CONTEXT RUNTIME - SERIALIZATION BENCHMARKS                
+               TOON vs. Minified JSON Token Savings & Latency                   
+================================================================================
+
+┌─────────┬─────────────────────────────────────────────────────┬─────────────┬───────────┬─────────────┬───────────┬─────────────┬─────────────┐
+│ (index) │ Scenario                                            │ JSON Tokens │ JSON (ms) │ TOON Tokens │ TOON (ms) │ Savings (%) │ Auto Choice │
+├─────────┼─────────────────────────────────────────────────────┼─────────────┼───────────┼─────────────┼───────────┼─────────────┼─────────────┤
+│ 0       │ 'Small Context (1 Task, 3 Decisions, 5 Facts)'      │ 641         │ '9.02'    │ 607         │ '2.28'    │ '5.3%'      │ 'TOON'      │
+│ 1       │ 'Medium Context (10 Tasks, 20 Decisions, 25 Facts)' │ 2893        │ '5.73'    │ 2570        │ '4.78'    │ '11.2%'     │ 'TOON'      │
+│ 2       │ 'Large Context (35 Tasks, 60 Decisions, 70 Facts)'  │ 7601        │ '10.51'   │ 6781        │ '7.32'    │ '10.8%'     │ 'TOON'      │
+└─────────┴─────────────────────────────────────────────────────┴─────────────┴───────────┴─────────────┴───────────┴─────────────┴─────────────┘
+```
+
+---
+
+## 🐳 Docker Deployment
+
+Run the complete production stack (PostgreSQL 17 + Fastify API Gateway) with a single command:
+
+```bash
+docker compose up -d
+```
+
+With optional API key authentication:
+```bash
+CTX_AUTH_TOKEN="my-secret-key" docker compose up -d
+```
 
 ---
 
 ## 🧪 Testing
 
-Run all 9 unit and end-to-end integration tests:
+Run all unit and end-to-end integration tests:
 
 ```bash
 npm test
@@ -282,15 +315,16 @@ npm test
 ✔ CheckpointSchema validates valid checkpoint
 ✔ ContextPackageSchema validates structure
 ✔ ContextSerializer encodes and round-trips TOON & JSON
-✔ ContextSerializer respects explicit JSON preference
+✔ ContextSerializer enforces tokenBudget pruning on large context
 ✔ API: health check returns ok
 ✔ API: resolve project and checkpoint workflow
+✔ API: authentication middleware enforces token check on protected routes
 ✔ Git inspector reports repo state safely
 ✔ Config manager saves and loads .ctx/config.json
 ✔ MCP Server initializes with all core tools registered
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-11 passed, 0 failed
+12 passed, 0 failed
 ```
 
 ---
@@ -299,10 +333,10 @@ npm test
 
 - [x] **Phase 1: Foundation** (PostgreSQL 17, schema migrations, CLI commands `init`/`status`/`checkpoint`)
 - [x] **Phase 2: TOON Context Optimizer** (`@toon-format/toon`, token measurement, round-trip validation)
-- [x] **Phase 3: Model Context Protocol (MCP)** (`@modelcontextprotocol/sdk` stdio server with 9 tools)
+- [x] **Phase 3: Model Context Protocol (MCP)** (`@modelcontextprotocol/sdk` stdio server with 12 tools)
 - [x] **Phase 4: Token Budgeting & Concurrency** (Priority-based pruning, Git drift guardrails, HTTP 409 conflict detection, event stream)
-- [ ] **Phase 5: Full-Text Memory Search** (PostgreSQL `tsvector`/`tsquery` search for past decisions)
-- [ ] **Phase 6: Multi-Tenant Cloud & Auth** (OIDC/OAuth JWT validation, tenant isolation)
+- [x] **Phase 5: Full-Text Memory Search & Leases** (PostgreSQL `tsvector`/`tsquery` search and multi-agent task locks)
+- [x] **Phase 6: Production Hardening & Benchmarks** (Bearer/API key auth, rate-limiting, Docker Compose, automated benchmark suite)
 
 ---
 

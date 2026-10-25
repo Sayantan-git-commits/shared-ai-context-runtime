@@ -122,9 +122,16 @@ export class ContextSerializer {
    */
   public async encode(
     pkg: ContextPackage,
-    preference: "auto" | "toon" | "json" = "auto",
-    tokenBudget?: number
+    preferenceOrOptions: "auto" | "toon" | "json" | { formatPreference?: "auto" | "toon" | "json"; tokenBudget?: number } = "auto",
+    tokenBudgetArg?: number
   ): Promise<SerializationResult> {
+    const preference = typeof preferenceOrOptions === "object"
+      ? (preferenceOrOptions.formatPreference || "auto")
+      : preferenceOrOptions;
+    const tokenBudget = typeof preferenceOrOptions === "object"
+      ? preferenceOrOptions.tokenBudget
+      : tokenBudgetArg;
+
     const { pkg: budgetPkg, prunedCount, budgetExceeded } = this.pruneToBudget(pkg, tokenBudget);
 
     const minifiedJson = JSON.stringify(budgetPkg);

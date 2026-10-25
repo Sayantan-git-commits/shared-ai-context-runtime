@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { randomUUID } from "node:crypto";
 import {
   type ContextStore,
@@ -12,6 +13,8 @@ import {
   CreateTaskInputSchema,
   UpdateTaskInputSchema,
   CreateAgentEventInputSchema,
+  AcquireTaskLeaseInputSchema,
+  ReleaseTaskLeaseInputSchema,
   AssembleContextRequestSchema,
   ResolveProjectRequestSchema,
   type ContextPackage,
@@ -19,6 +22,8 @@ import {
 
 export interface ServerOptions {
   store?: ContextStore;
+  authToken?: string;
+  enableRateLimit?: boolean;
 }
 
 export function buildServer(options: ServerOptions = {}): FastifyInstance {
@@ -27,6 +32,34 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
   const serializer = new ContextSerializer();
 
   server.register(cors, { origin: true });
+
+  if (options.enableRateLimit) {
+    server.register(rateLimit, {
+      max: 100,
+      timeWindow: "1 minute",
+    });
+  }
+
+  const configuredToken = options.authToken || process.env.CTX_AUTH_TOKEN;
+  if (configuredToken) {
+    server.addHook("onRequest", async (request, reply) => {
+      if (request.url === "/health") {
+        return;
+      }
+      const authHeader = request.headers["authorization"];
+      const apiKeyHeader = request.headers["x-api-key"] as string | undefined;
+      const token = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice(7).trim()
+        : apiKeyHeader;
+
+      if (!token || token !== configuredToken) {
+        return reply.status(401).send({
+          error: "Unauthorized",
+          message: "Valid Bearer token or x-api-key header required",
+        });
+      }
+    });
+  }
 
   server.get("/health", async () => {
     return { status: "ok", timestamp: new Date().toISOString() };
@@ -91,6 +124,41 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     }
   });
 
+  // Task Leases
+  server.post("/v1/tasks/:taskId/lease/acquire", async (request, reply) => {
+    const { taskId } = request.params as { taskId: string };
+    const parse = AcquireTaskLeaseInputSchema.safeParse(request.body || {});
+    if (!parse.success) {
+      return reply.status(400).send({ error: parse.error.format() });
+    }
+    try {
+      const result = await store.acquireTaskLease(taskId, parse.data.agentId, parse.data.durationSeconds);
+      return reply.send(result);
+    } catch (err: any) {
+      if (err instanceof ConflictError) {
+        return reply.status(409).send({ error: "Conflict", message: err.message });
+      }
+      throw err;
+    }
+  });
+
+  server.post("/v1/tasks/:taskId/lease/release", async (request, reply) => {
+    const { taskId } = request.params as { taskId: string };
+    const parse = ReleaseTaskLeaseInputSchema.safeParse(request.body || {});
+    if (!parse.success) {
+      return reply.status(400).send({ error: parse.error.format() });
+    }
+    try {
+      const task = await store.releaseTaskLease(taskId, parse.data.leaseToken);
+      return reply.send(task);
+    } catch (err: any) {
+      if (err instanceof ConflictError) {
+        return reply.status(409).send({ error: "Conflict", message: err.message });
+      }
+      throw err;
+    }
+  });
+
   // Checkpoints
   server.post("/v1/projects/:projectId/checkpoints", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
@@ -142,6 +210,16 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const body = { ...(request.body as object), projectId };
     const memory = await store.createMemory(body as any);
     return reply.status(201).send(memory);
+  });
+
+  server.get("/v1/projects/:projectId/memories/search", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    if (!q || q.trim().length === 0) {
+      return reply.status(400).send({ error: "Query parameter 'q' is required" });
+    }
+    const results = await store.searchMemories(projectId, q.trim(), limit ? Number(limit) : 10);
+    return reply.send(results);
   });
 
   // Events

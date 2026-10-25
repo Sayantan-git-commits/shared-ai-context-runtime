@@ -75,8 +75,22 @@ export const TaskSchema = z.object({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().nullable().optional(),
+  leaseExpiresAt: z.string().datetime().nullable().optional(),
+  leaseToken: z.string().nullable().optional(),
+  leaseAgentId: z.string().nullable().optional(),
 });
 export type Task = z.infer<typeof TaskSchema>;
+
+export const AcquireTaskLeaseInputSchema = z.object({
+  agentId: z.string().min(1),
+  durationSeconds: z.number().int().positive().default(300),
+});
+export type AcquireTaskLeaseInput = z.infer<typeof AcquireTaskLeaseInputSchema>;
+
+export const ReleaseTaskLeaseInputSchema = z.object({
+  leaseToken: z.string().min(1),
+});
+export type ReleaseTaskLeaseInput = z.infer<typeof ReleaseTaskLeaseInputSchema>;
 
 export const CreateTaskInputSchema = TaskSchema.pick({
   projectId: true,
@@ -191,6 +205,11 @@ export const MemoryEntrySchema = z.object({
   isDeleted: z.boolean().default(false),
 });
 export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
+
+export const SearchMemoryResultSchema = MemoryEntrySchema.extend({
+  rank: z.number().optional(),
+});
+export type SearchMemoryResult = z.infer<typeof SearchMemoryResultSchema>;
 
 // --- Agent Events Schemas ---
 

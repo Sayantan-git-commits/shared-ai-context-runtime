@@ -325,7 +325,71 @@ program
     }
   });
 
-// 6. ctx doctor
+// 7. ctx memory (search & add)
+const memoryCmd = program.command("memory").description("Search and manage persistent project memories");
+
+memoryCmd
+  .command("search <query>")
+  .description("Search architectural decisions, facts, and rules using full-text search")
+  .action(async (query: string) => {
+    const cwd = process.cwd();
+    const config = loadLocalConfig(cwd);
+    if (!config) {
+      console.error("No .ctx configuration found. Run 'ctx init' first.");
+      process.exit(1);
+    }
+
+    const client = resolveClient();
+    try {
+      const results = await client.searchMemories(config.project_id, query);
+      if (results.length === 0) {
+        console.log(`No memories matching "${query}".`);
+        return;
+      }
+
+      console.log(`Search results for "${query}" (${results.length} found):`);
+      console.log("TYPE     | TITLE                                    | RANK  | CONTENT PREVIEW");
+      console.log("---------+------------------------------------------+-------+-----------------------------");
+      for (const m of results) {
+        const t = (m.type || "").slice(0, 8).toUpperCase().padEnd(8);
+        const ti = (m.title || "").slice(0, 40).padEnd(40);
+        const r = String((m.rank || 0).toFixed(2)).padEnd(5);
+        const c = (m.content || "").replace(/\n/g, " ").slice(0, 40);
+        console.log(`${t} | ${ti} | ${r} | ${c}...`);
+      }
+    } catch (err: any) {
+      console.error(`Memory search failed: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+memoryCmd
+  .command("add <title> <content>")
+  .description("Add a persistent decision, fact, or procedure to project memory")
+  .option("-t, --type <type>", "Memory category (decision, fact, procedure, note)", "decision")
+  .action(async (title: string, content: string, options: any) => {
+    const cwd = process.cwd();
+    const config = loadLocalConfig(cwd);
+    if (!config) {
+      console.error("No .ctx configuration found. Run 'ctx init' first.");
+      process.exit(1);
+    }
+
+    const client = resolveClient();
+    try {
+      const mem = await client.createMemory(config.project_id, {
+        title,
+        content,
+        type: options.type || "decision",
+      });
+      console.log(`✓ Memory entry recorded: [${mem.type.toUpperCase()}] "${mem.title}" (ID: ${mem.id})`);
+    } catch (err: any) {
+      console.error(`Failed to add memory: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+// 8. ctx doctor
 program
   .command("doctor")
   .description("Verify local Git configuration, .ctx setup, and API connectivity")
