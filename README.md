@@ -192,11 +192,14 @@ ctx status
 # Record an immutable verified checkpoint
 ctx checkpoint -m "Completed JWT authentication; next: implement token rotation"
 
-# Resume in another client with TOON compression
-ctx continue
+# Resume in another client with TOON compression (with optional budget and drift flags)
+ctx continue --budget 4000 --ignore-drift
 
 # View complete version history
 ctx history
+
+# View append-only agent event audit trail
+ctx events
 ```
 
 ---
@@ -214,8 +217,10 @@ Connect `ctx` directly to your favorite AI assistant so the model can inspect ch
 | `ctx_get_checkpoint` | `projectId`, `latestOnly` | Retrieves latest or historical checkpoints |
 | `ctx_save_checkpoint` | `projectId`, `branch`, `completedItems`, `nextAction`, ... | Records an immutable checkpoint |
 | `ctx_record_decision` | `projectId`, `title`, `content`, `type` | Stores decisions and rules in semantic memory |
-| `ctx_assemble_context`| `projectId`, `taskId`, `formatPreference` | Compiles and token-optimizes context via TOON |
-| `ctx_update_task` | `taskId`, `status`, `nextAction` | Updates task lifecycle status and milestones |
+| `ctx_assemble_context`| `projectId`, `taskId`, `formatPreference`, `tokenBudget` | Compiles and token-optimizes context via TOON |
+| `ctx_update_task` | `taskId`, `status`, `nextAction`, `expectedVersion` | Updates task lifecycle with optimistic concurrency check |
+| `ctx_record_event` | `projectId`, `eventType`, `payload` | Logs an event in the append-only audit stream |
+| `ctx_list_events` | `projectId`, `taskId` | Retrieves audit event trail for a project or task |
 
 ### Configuration
 
@@ -294,10 +299,10 @@ npm test
 
 - [x] **Phase 1: Foundation** (PostgreSQL 17, schema migrations, CLI commands `init`/`status`/`checkpoint`)
 - [x] **Phase 2: TOON Context Optimizer** (`@toon-format/toon`, token measurement, round-trip validation)
-- [x] **Phase 3: Model Context Protocol (MCP)** (`@modelcontextprotocol/sdk` stdio server with 7 tools)
-- [ ] **Phase 4: Intelligent Context Budgeting** (Dynamic pruning and summarization when exceeding token budget)
+- [x] **Phase 3: Model Context Protocol (MCP)** (`@modelcontextprotocol/sdk` stdio server with 9 tools)
+- [x] **Phase 4: Token Budgeting & Concurrency** (Priority-based pruning, Git drift guardrails, HTTP 409 conflict detection, event stream)
 - [ ] **Phase 5: Full-Text Memory Search** (PostgreSQL `tsvector`/`tsquery` search for past decisions)
-- [ ] **Phase 6: Multi-Agent Concurrency & Leases** (Optimistic locking conflict rejection `409 Conflict`)
+- [ ] **Phase 6: Multi-Tenant Cloud & Auth** (OIDC/OAuth JWT validation, tenant isolation)
 
 ---
 

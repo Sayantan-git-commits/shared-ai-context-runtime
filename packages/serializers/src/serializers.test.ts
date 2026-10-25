@@ -49,19 +49,53 @@ test("ContextSerializer encodes and round-trips TOON & JSON", async () => {
   assert.equal(decoded.projectName, samplePackage.projectName);
 });
 
-test("ContextSerializer respects explicit JSON preference", async () => {
+test("ContextSerializer enforces tokenBudget pruning on large context", async () => {
   const serializer = new ContextSerializer();
-  const pkg: ContextPackage = {
+
+  const largePackage: ContextPackage = {
     schemaVersion: 1,
     projectId: "b0000000-0000-0000-0000-000000000001",
-    instructions: [],
-    facts: {},
-    decisions: [],
-    taskState: {},
-    recentEvents: [],
+    projectName: "huge-service",
+    instructions: ["System instruction 1", "System instruction 2"],
+    facts: {
+      fact1: "value1",
+      fact2: "value2",
+      fact3: "value3",
+      fact4: "value4",
+      fact5: "value5",
+      fact6: "value6",
+      fact7: "value7",
+    },
+    decisions: [
+      { id: "1", title: "dec 1" },
+      { id: "2", title: "dec 2" },
+      { id: "3", title: "dec 3" },
+      { id: "4", title: "dec 4" },
+      { id: "5", title: "dec 5" },
+    ],
+    taskState: {
+      title: "Active task",
+      status: "in_progress",
+      nextAction: "Crucial next step",
+      completed: [
+        { description: "step 1", evidence: "large log dump of 100 lines..." },
+        { description: "step 2", evidence: "another large log dump..." },
+      ],
+      pending: [],
+    },
+    recentEvents: [
+      { event: "log1", detail: "very verbose output" },
+      { event: "log2", detail: "even more verbose" },
+      { event: "log3", detail: "lots of tokens" },
+    ],
   };
 
-  const result = await serializer.encode(pkg, "json");
-  assert.equal(result.format, "json");
-  assert.equal(result.serialized, JSON.stringify(pkg));
+  // Restrict to tight budget: 150 tokens
+  const result = await serializer.encode(largePackage, "auto", 150);
+  assert.ok(result.prunedItemsCount > 0);
+
+  // Essential state must be preserved
+  const decoded = serializer.decode(result.serialized, result.format) as any;
+  assert.equal(decoded.taskState.nextAction, "Crucial next step");
+  assert.equal(decoded.projectName, "huge-service");
 });

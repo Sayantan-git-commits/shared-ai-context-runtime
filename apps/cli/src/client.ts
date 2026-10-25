@@ -88,6 +88,14 @@ export class CtxApiClient {
     return (await res.json()) as AssembleContextResponse;
   }
 
+  public async listEvents(projectId: string): Promise<any[]> {
+    const res = await fetch(`${this.baseUrl}/v1/projects/${projectId}/events`);
+    if (!res.ok) {
+      throw new Error(`Failed to list events: ${res.statusText}`);
+    }
+    return (await res.json()) as any[];
+  }
+
   public async checkHealth(): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}/health`);

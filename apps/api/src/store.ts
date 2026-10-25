@@ -10,7 +10,16 @@ import type {
   CreateCheckpointInput,
   MemoryEntry,
   MemoryType,
+  AgentEvent,
+  CreateAgentEventInput,
 } from "@ctx/schemas";
+
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+  }
+}
 
 export interface ContextStore {
   resolveProject(gitRemoteUrl?: string, projectName?: string): Promise<Project>;
@@ -24,6 +33,8 @@ export interface ContextStore {
   listCheckpoints(projectId: string): Promise<Checkpoint[]>;
   createMemory(entry: Omit<MemoryEntry, "id" | "createdAt" | "updatedAt">): Promise<MemoryEntry>;
   listMemories(projectId: string, type?: MemoryType): Promise<MemoryEntry[]>;
+  recordEvent(input: CreateAgentEventInput): Promise<AgentEvent>;
+  listEvents(projectId: string, taskId?: string): Promise<AgentEvent[]>;
 }
 
 export class MemoryContextStore implements ContextStore {
@@ -31,6 +42,7 @@ export class MemoryContextStore implements ContextStore {
   private tasks: Map<string, Task> = new Map();
   private checkpoints: Map<string, Checkpoint[]> = new Map(); // projectId -> checkpoints
   private memories: Map<string, MemoryEntry[]> = new Map(); // projectId -> memories
+  private events: Map<string, AgentEvent[]> = new Map(); // projectId -> events
 
   public async resolveProject(gitRemoteUrl?: string, projectName?: string): Promise<Project> {
     // Look up by git remote or name
@@ -88,9 +100,16 @@ export class MemoryContextStore implements ContextStore {
     const task = this.tasks.get(id);
     if (!task) throw new Error(`Task ${id} not found`);
 
+    if (input.expectedVersion !== undefined && task.currentVersion !== input.expectedVersion) {
+      throw new ConflictError(
+        `Conflict: expected task version ${input.expectedVersion}, but current version is ${task.currentVersion}`
+      );
+    }
+
+    const { expectedVersion, ...rest } = input;
     const updated: Task = {
       ...task,
-      ...input,
+      ...rest,
       currentVersion: task.currentVersion + 1,
       updatedAt: new Date().toISOString(),
       completedAt: input.status === "completed" ? new Date().toISOString() : task.completedAt,
@@ -159,6 +178,30 @@ export class MemoryContextStore implements ContextStore {
   public async listMemories(projectId: string, type?: MemoryType): Promise<MemoryEntry[]> {
     const list = this.memories.get(projectId) || [];
     return list.filter((m) => !m.isDeleted && (!type || m.type === type));
+  }
+
+  public async recordEvent(input: CreateAgentEventInput): Promise<AgentEvent> {
+    const now = new Date().toISOString();
+    const event: AgentEvent = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      taskId: input.taskId || null,
+      agentId: input.agentId || null,
+      eventType: input.eventType,
+      payload: input.payload || {},
+      createdAt: now,
+      correlationId: input.correlationId || null,
+      idempotencyKey: input.idempotencyKey || null,
+    };
+    const list = this.events.get(input.projectId) || [];
+    list.push(event);
+    this.events.set(input.projectId, list);
+    return event;
+  }
+
+  public async listEvents(projectId: string, taskId?: string): Promise<AgentEvent[]> {
+    const list = this.events.get(projectId) || [];
+    return list.filter((e) => !taskId || e.taskId === taskId).reverse();
   }
 }
 
@@ -229,6 +272,29 @@ export class PostgresContextStore implements ContextStore {
   }
 
   public async updateTask(id: string, input: UpdateTaskInput): Promise<Task> {
+    if (input.expectedVersion !== undefined) {
+      const res = await this.pool.query(
+        `UPDATE tasks
+         SET title = COALESCE($2, title),
+             status = COALESCE($3, status),
+             next_action = COALESCE($4, next_action),
+             current_version = current_version + 1,
+             updated_at = NOW(),
+             completed_at = CASE WHEN $3 = 'completed' THEN NOW() ELSE completed_at END
+         WHERE id = $1 AND current_version = $5
+         RETURNING *`,
+        [id, input.title, input.status, input.nextAction, input.expectedVersion]
+      );
+      if (res.rows.length === 0) {
+        const existing = await this.getTask(id);
+        if (!existing) throw new Error(`Task ${id} not found`);
+        throw new ConflictError(
+          `Conflict: expected task version ${input.expectedVersion}, but current version is ${existing.currentVersion}`
+        );
+      }
+      return this.mapTask(res.rows[0]);
+    }
+
     const res = await this.pool.query(
       `UPDATE tasks
        SET title = COALESCE($2, title),
@@ -241,6 +307,7 @@ export class PostgresContextStore implements ContextStore {
        RETURNING *`,
       [id, input.title, input.status, input.nextAction]
     );
+    if (res.rows.length === 0) throw new Error(`Task ${id} not found`);
     return this.mapTask(res.rows[0]);
   }
 
@@ -330,6 +397,49 @@ export class PostgresContextStore implements ContextStore {
     const params = type ? [projectId, type] : [projectId];
     const res = await this.pool.query(query, params);
     return res.rows.map((r: any) => this.mapMemory(r));
+  }
+
+  public async recordEvent(input: CreateAgentEventInput): Promise<AgentEvent> {
+    const res = await this.pool.query(
+      `INSERT INTO agent_events (
+         project_id, task_id, agent_id, event_type, payload, correlation_id, idempotency_key
+       )
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+       RETURNING *`,
+      [
+        input.projectId,
+        input.taskId || null,
+        input.agentId || null,
+        input.eventType,
+        JSON.stringify(input.payload || {}),
+        input.correlationId || null,
+        input.idempotencyKey || null,
+      ]
+    );
+    return this.mapEvent(res.rows[0]);
+  }
+
+  public async listEvents(projectId: string, taskId?: string): Promise<AgentEvent[]> {
+    const query = taskId
+      ? "SELECT * FROM agent_events WHERE project_id = $1 AND task_id = $2 ORDER BY created_at DESC"
+      : "SELECT * FROM agent_events WHERE project_id = $1 ORDER BY created_at DESC";
+    const params = taskId ? [projectId, taskId] : [projectId];
+    const res = await this.pool.query(query, params);
+    return res.rows.map((r: any) => this.mapEvent(r));
+  }
+
+  private mapEvent(row: any): AgentEvent {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      taskId: row.task_id,
+      agentId: row.agent_id,
+      eventType: row.event_type,
+      payload: row.payload || {},
+      createdAt: row.created_at.toISOString(),
+      correlationId: row.correlation_id,
+      idempotencyKey: row.idempotency_key,
+    };
   }
 
   private mapProject(row: any): Project {

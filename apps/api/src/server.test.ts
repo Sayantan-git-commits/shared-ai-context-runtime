@@ -85,4 +85,43 @@ test("API: resolve project and checkpoint workflow", async () => {
   assert.ok(["toon", "json"].includes(assemble.format));
   assert.equal(assemble.checkpointVersion, 1);
   assert.ok(assemble.estimatedTokens > 0);
+
+  // 5. Test optimistic locking conflict (HTTP 409)
+  // Current task version is 1; trying to update with expectedVersion: 99
+  const conflictRes = await app.inject({
+    method: "PATCH",
+    url: `/v1/tasks/${task.id}`,
+    payload: {
+      nextAction: "Stale update",
+      expectedVersion: 99,
+    },
+  });
+  assert.equal(conflictRes.statusCode, 409);
+  const conflictJson = conflictRes.json();
+  assert.equal(conflictJson.error, "Conflict");
+
+  // Valid update with expectedVersion: 1 succeeds and bumps to version 2
+  const validUpdateRes = await app.inject({
+    method: "PATCH",
+    url: `/v1/tasks/${task.id}`,
+    payload: {
+      nextAction: "Valid update",
+      expectedVersion: 1,
+    },
+  });
+  assert.equal(validUpdateRes.statusCode, 200);
+  const updatedTask = validUpdateRes.json();
+  assert.equal(updatedTask.currentVersion, 2);
+
+  // 6. Test event audit stream
+  const eventsRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${project.id}/events`,
+  });
+  assert.equal(eventsRes.statusCode, 200);
+  const events = eventsRes.json();
+  assert.ok(events.length >= 2);
+  const eventTypes = events.map((e: any) => e.eventType);
+  assert.ok(eventTypes.includes("checkpoint_saved"));
+  assert.ok(eventTypes.includes("context_assembled"));
 });

@@ -312,18 +312,19 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
   // 7. ctx_update_task
   server.tool(
     "ctx_update_task",
-    "Update task status, priority, or next action",
+    "Update task status, priority, or next action with optimistic concurrency conflict detection",
     {
       taskId: z.string().uuid().describe("Unique task UUID"),
       status: z.enum(["pending", "in_progress", "blocked", "completed", "cancelled"]).optional(),
       nextAction: z.string().optional(),
       title: z.string().optional(),
+      expectedVersion: z.number().int().positive().optional().describe("Expected task version to prevent race conditions"),
     },
-    async ({ taskId, status, nextAction, title }) => {
+    async ({ taskId, status, nextAction, title, expectedVersion }) => {
       try {
         const updated = await apiFetch<any>(`/v1/tasks/${taskId}`, {
           method: "PATCH",
-          body: JSON.stringify({ status, nextAction, title }),
+          body: JSON.stringify({ status, nextAction, title, expectedVersion }),
         });
 
         return {
@@ -337,6 +338,70 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error updating task: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // 8. ctx_record_event
+  server.tool(
+    "ctx_record_event",
+    "Record an agent activity or milestone event in the append-only audit stream",
+    {
+      projectId: z.string().uuid().describe("Unique project UUID"),
+      taskId: z.string().uuid().optional().describe("Associated task UUID"),
+      eventType: z.string().describe("Event name, e.g. test_executed, file_refactored"),
+      payload: z.record(z.unknown()).default({}).describe("JSON payload of event details"),
+    },
+    async ({ projectId, taskId, eventType, payload }) => {
+      try {
+        const event = await apiFetch<any>(`/v1/projects/${projectId}/events`, {
+          method: "POST",
+          body: JSON.stringify({ projectId, taskId, eventType, payload }),
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✓ Event recorded: [${event.eventType}] at ${event.createdAt} (ID: ${event.id})`,
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error recording event: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // 9. ctx_list_events
+  server.tool(
+    "ctx_list_events",
+    "Retrieve the append-only audit event trail for a project or task",
+    {
+      projectId: z.string().uuid().describe("Unique project UUID"),
+      taskId: z.string().uuid().optional().describe("Optional task filter"),
+    },
+    async ({ projectId, taskId }) => {
+      try {
+        const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : "";
+        const events = await apiFetch<any[]>(`/v1/projects/${projectId}/events${query}`);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(events, null, 2),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error listing events: ${err.message}` }],
           isError: true,
         };
       }

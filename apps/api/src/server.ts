@@ -4,12 +4,14 @@ import { randomUUID } from "node:crypto";
 import {
   type ContextStore,
   MemoryContextStore,
+  ConflictError,
 } from "./store.js";
 import { ContextSerializer } from "@ctx/serializers";
 import {
   CreateCheckpointInputSchema,
   CreateTaskInputSchema,
   UpdateTaskInputSchema,
+  CreateAgentEventInputSchema,
   AssembleContextRequestSchema,
   ResolveProjectRequestSchema,
   type ContextPackage,
@@ -78,8 +80,15 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     if (!parse.success) {
       return reply.status(400).send({ error: parse.error.format() });
     }
-    const updated = await store.updateTask(taskId, parse.data);
-    return reply.send(updated);
+    try {
+      const updated = await store.updateTask(taskId, parse.data);
+      return reply.send(updated);
+    } catch (err: any) {
+      if (err instanceof ConflictError) {
+        return reply.status(409).send({ error: "Conflict", message: err.message });
+      }
+      throw err;
+    }
   });
 
   // Checkpoints
@@ -91,6 +100,20 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       return reply.status(400).send({ error: parse.error.format() });
     }
     const checkpoint = await store.createCheckpoint(parse.data);
+
+    // Audit event log
+    await store.recordEvent({
+      projectId,
+      taskId: checkpoint.taskId || undefined,
+      eventType: "checkpoint_saved",
+      payload: {
+        checkpointId: checkpoint.id,
+        version: checkpoint.version,
+        branch: checkpoint.branch,
+        nextAction: checkpoint.state.nextAction,
+      },
+    });
+
     return reply.status(201).send(checkpoint);
   });
 
@@ -121,6 +144,25 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     return reply.status(201).send(memory);
   });
 
+  // Events
+  server.get("/v1/projects/:projectId/events", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const { taskId } = request.query as { taskId?: string };
+    const events = await store.listEvents(projectId, taskId);
+    return reply.send(events);
+  });
+
+  server.post("/v1/projects/:projectId/events", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = { ...(request.body as object), projectId };
+    const parse = CreateAgentEventInputSchema.safeParse(body);
+    if (!parse.success) {
+      return reply.status(400).send({ error: parse.error.format() });
+    }
+    const event = await store.recordEvent(parse.data);
+    return reply.status(201).send(event);
+  });
+
   // Context Assembly & TOON Optimization
   server.post("/v1/projects/:projectId/context/assemble", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
@@ -136,6 +178,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
     const taskId = parse.data.taskId || checkpoint?.taskId || undefined;
     const task = taskId ? await store.getTask(taskId) : null;
     const memories = await store.listMemories(projectId);
+    const recentEvents = await store.listEvents(projectId, taskId);
 
     // Group memories
     const facts: Record<string, unknown> = {};
@@ -166,7 +209,11 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
         pending: checkpoint?.state.pending || [],
         blockers: checkpoint?.state.blockers || [],
       },
-      recentEvents: [],
+      recentEvents: recentEvents.slice(0, 5).map((e) => ({
+        type: e.eventType,
+        payload: e.payload,
+        createdAt: e.createdAt,
+      })),
       gitState: checkpoint
         ? {
             branch: checkpoint.branch,
@@ -177,8 +224,26 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
         : undefined,
     };
 
-    // Run serialization optimizer
-    const serialization = await serializer.encode(pkg, parse.data.formatPreference);
+    // Run serialization optimizer with token budget pruning
+    const serialization = await serializer.encode(
+      pkg,
+      parse.data.formatPreference,
+      parse.data.tokenBudget
+    );
+
+    // Audit context handoff event
+    await store.recordEvent({
+      projectId,
+      taskId: task?.id,
+      eventType: "context_assembled",
+      payload: {
+        format: serialization.format,
+        estimatedTokens: serialization.estimatedTokens,
+        tokenBudget: parse.data.tokenBudget,
+        budgetExceeded: serialization.budgetExceeded,
+        prunedItemsCount: serialization.prunedItemsCount,
+      },
+    });
 
     return reply.send({
       contextId: randomUUID(),
@@ -190,6 +255,9 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       estimatedTokens: serialization.estimatedTokens,
       baselineTokens: serialization.baselineTokens,
       savingsPercent: serialization.savingsPercent,
+      tokenBudget: parse.data.tokenBudget,
+      budgetExceeded: serialization.budgetExceeded,
+      prunedItemsCount: serialization.prunedItemsCount,
       sources: checkpoint ? [{ type: "checkpoint", id: checkpoint.id }] : [],
     });
   });

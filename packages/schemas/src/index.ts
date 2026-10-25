@@ -92,6 +92,8 @@ export const UpdateTaskInputSchema = TaskSchema.partial().omit({
   id: true,
   projectId: true,
   createdAt: true,
+}).extend({
+  expectedVersion: z.number().int().positive().optional(),
 });
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInputSchema>;
 
@@ -190,6 +192,32 @@ export const MemoryEntrySchema = z.object({
 });
 export type MemoryEntry = z.infer<typeof MemoryEntrySchema>;
 
+// --- Agent Events Schemas ---
+
+export const AgentEventSchema = z.object({
+  id: z.string().uuid(),
+  projectId: z.string().uuid(),
+  taskId: z.string().uuid().nullable().optional(),
+  agentId: z.string().uuid().nullable().optional(),
+  eventType: z.string().min(1),
+  payload: z.record(z.unknown()).default({}),
+  createdAt: z.string().datetime(),
+  correlationId: z.string().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+});
+export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
+export const CreateAgentEventInputSchema = z.object({
+  projectId: z.string().uuid(),
+  taskId: z.string().uuid().optional(),
+  agentId: z.string().uuid().optional(),
+  eventType: z.string().min(1),
+  payload: z.record(z.unknown()).default({}),
+  correlationId: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+});
+export type CreateAgentEventInput = z.infer<typeof CreateAgentEventInputSchema>;
+
 // --- Context Package & Serialization Contracts ---
 
 export type ContextFormat = "toon" | "json";
@@ -247,6 +275,9 @@ export const AssembleContextResponseSchema = z.object({
   estimatedTokens: z.number().int(),
   baselineTokens: z.number().int().optional(),
   savingsPercent: z.number(),
+  tokenBudget: z.number().int().optional(),
+  budgetExceeded: z.boolean().default(false),
+  prunedItemsCount: z.number().int().default(0),
   sources: z.array(z.object({
     type: z.string(),
     id: z.string(),

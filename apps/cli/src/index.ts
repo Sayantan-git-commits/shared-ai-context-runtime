@@ -153,6 +153,8 @@ program
   .description("Resume from the latest verified checkpoint using TOON context serialization")
   .option("--client <clientType>", "Target agent client (claude-code, generic)")
   .option("--format <format>", "Context format preference (auto, toon, json)", "auto")
+  .option("--budget <number>", "Target token budget ceiling", "8000")
+  .option("--ignore-drift", "Bypass Git drift warning and resume anyway")
   .action(async (projectPathArg, options) => {
     const cwd = projectPathArg ? path.resolve(projectPathArg) : process.cwd();
     const config = loadLocalConfig(cwd);
@@ -172,15 +174,37 @@ program
         return;
       }
 
-      // Detect Git drift
+      // Detect Git drift (Section 14 & 15)
       const isBranchDrift = checkpoint.branch !== gitState.branch;
-      const isDirty = !gitState.workingTree.clean;
+      const isCommitDrift = Boolean(
+        checkpoint.gitCommit && gitState.headCommit && checkpoint.gitCommit !== gitState.headCommit
+      );
+      const isDirtyDrift = Boolean(checkpoint.workingTree.clean !== gitState.workingTree.clean);
+      const hasDrift = isBranchDrift || isCommitDrift || isDirtyDrift;
 
+      if (hasDrift) {
+        console.log("⚠️  GIT DRIFT DETECTED:");
+        if (isBranchDrift) {
+          console.log(`   • Branch changed: checkpoint was on '${checkpoint.branch}', current is '${gitState.branch}'`);
+        }
+        if (isCommitDrift) {
+          console.log(`   • Commit changed: checkpoint commit ${checkpoint.gitCommit?.slice(0, 7)}, current HEAD ${gitState.headCommit?.slice(0, 7)}`);
+        }
+        if (isDirtyDrift) {
+          console.log(`   • Working tree status changed: checkpoint was ${checkpoint.workingTree.clean ? "clean" : "dirty"}, current is ${gitState.workingTree.clean ? "clean" : "dirty"}`);
+        }
+        if (!options.ignoreDrift && isBranchDrift) {
+          console.log("\n[Notice] Resuming across branches may cause conflicting agent edits.");
+          console.log("         Use --ignore-drift to suppress this warning.\n");
+        }
+      }
+
+      const tokenBudget = Number(options.budget || 8000);
       const assembled = await client.assembleContext(config.project_id, {
         taskId: checkpoint.taskId || undefined,
         formatPreference: (options.format as any) || "auto",
         clientType: options.client || "generic",
-        tokenBudget: 8000,
+        tokenBudget,
       });
 
       // Prepare client adapter handoff
@@ -204,14 +228,20 @@ program
 
       console.log(`Project:          ${config.project_name || config.project_id}`);
       console.log(`Checkpoint:       ckpt_${checkpoint.version} (version ${checkpoint.version})`);
-      console.log(`Branch:           ${gitState.branch}${isBranchDrift ? ` (Warning: checkpoint was on ${checkpoint.branch})` : ""}`);
+      console.log(`Branch:           ${gitState.branch}${isBranchDrift ? ` (Warning: checkpoint on ${checkpoint.branch})` : ""}`);
       console.log(
-        `Repository state: ${isDirty ? "working tree has uncommitted changes" : "clean"}`
+        `Repository state: ${!gitState.workingTree.clean ? "working tree has uncommitted changes" : "clean"}`
       );
       console.log(`Next action:      ${checkpoint.state.nextAction || "Review checkpoint and continue"}`);
       console.log("");
       console.log(`Context format:   ${assembled.format.toUpperCase()} (saved ${assembled.savingsPercent}% tokens)`);
-      console.log(`Estimated tokens: ${assembled.estimatedTokens}`);
+      console.log(`Estimated tokens: ${assembled.estimatedTokens} (budget: ${tokenBudget})`);
+      if (assembled.prunedItemsCount && assembled.prunedItemsCount > 0) {
+        console.log(`Budget pruning:   Pruned ${assembled.prunedItemsCount} historical items to respect ${tokenBudget} token budget`);
+      }
+      if (assembled.budgetExceeded) {
+        console.log(`Budget warning:   Context still exceeds token ceiling (${assembled.estimatedTokens} > ${tokenBudget})`);
+      }
       console.log(`Client adapter:   ${adapter.name} (${resume.mode})`);
       console.log("");
       console.log("--------------------------------------------------");
@@ -256,6 +286,41 @@ program
       }
     } catch (err: any) {
       console.error(`Failed to list history: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+// 6. ctx events
+program
+  .command("events")
+  .description("Show append-only agent event audit trail")
+  .action(async () => {
+    const cwd = process.cwd();
+    const config = loadLocalConfig(cwd);
+    if (!config) {
+      console.error("No .ctx configuration found. Run 'ctx init' first.");
+      process.exit(1);
+    }
+
+    const client = resolveClient();
+    try {
+      const events = await client.listEvents(config.project_id);
+      if (events.length === 0) {
+        console.log("No events recorded yet for this project.");
+        return;
+      }
+
+      console.log(`Event audit stream for ${config.project_name || config.project_id}:`);
+      console.log("TIMESTAMP            | EVENT TYPE           | DETAILS");
+      console.log("---------------------+----------------------+------------------------------------");
+      for (const ev of events) {
+        const dt = (ev.createdAt || "").slice(0, 19).padEnd(20);
+        const et = (ev.eventType || "").padEnd(20);
+        const det = JSON.stringify(ev.payload || {}).slice(0, 50);
+        console.log(`${dt} | ${et} | ${det}`);
+      }
+    } catch (err: any) {
+      console.error(`Failed to list events: ${err.message}`);
       process.exit(1);
     }
   });
