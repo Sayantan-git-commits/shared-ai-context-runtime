@@ -7,7 +7,6 @@ import {
   ClaudeCodeAdapter,
   PromptHandoffAdapter,
 } from "../../packages/client-adapters/dist/index.js";
-import type { ContextPackage } from "../../packages/schemas/dist/index.js";
 
 test("E2E: Full cross-client handoff workflow (Tool A -> Tool B)", async () => {
   const app = buildServer({ allowAnonymous: true });
@@ -128,7 +127,7 @@ test("E2E: Full cross-client handoff workflow (Tool A -> Tool B)", async () => {
 
   // 7. Verify TOON serialization efficiency and round-trip decoding
   const serializer = new ContextSerializer();
-  const pkg: ContextPackage = {
+  const pkg = {
     schemaVersion: 1,
     projectId: project.id,
     projectName: project.name,
@@ -147,6 +146,6 @@ test("E2E: Full cross-client handoff workflow (Tool A -> Tool B)", async () => {
 
   const encoded = await serializer.encode(pkg, "auto");
   assert.ok(encoded.serialized.length > 0);
-  const decoded = serializer.decode(encoded.serialized, encoded.format) as any;
+  const decoded = serializer.decode(encoded.serialized, encoded.format);
   assert.equal(decoded.projectId, project.id);
 });

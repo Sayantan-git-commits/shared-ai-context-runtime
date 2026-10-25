@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run --workspace @ctx/schemas build && npm run --workspace @ctx/serializers build && npm run --workspace @ctx/client-adapters build && npm run --workspace @ctx/api build && npm run --workspace @ctx/mcp-server build && npm run --workspace ctx build",
-    "test": "npm run --workspaces --if-present test && node --test tests/e2e/*.test.ts",
+    "test": "npm run --workspaces --if-present test && node --test tests/e2e/*.test.js",
     "migrate": "node scripts/migrate.js",
     "benchmark": "node benchmarks/run.ts",
     "cli": "node apps/cli/dist/index.js",
