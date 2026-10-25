@@ -1,12 +1,11 @@
 import { ContextSerializer } from "../packages/serializers/dist/index.js";
-import type { ContextPackage } from "../packages/schemas/dist/index.js";
 
 function generateContextFixture(
-  name: string,
-  taskCount: number,
-  decisionCount: number,
-  factCount: number
-): ContextPackage {
+  name,
+  taskCount,
+  decisionCount,
+  factCount
+) {
   const decisions = Array.from({ length: decisionCount }, (_, i) => ({
     id: `dec-${i + 1}`,
     decision: `Architecture decision ${i + 1}: Adopt structured standard for subsystem ${i + 1}`,
@@ -17,7 +16,7 @@ function generateContextFixture(
 
   const pendingTasks = Array.from({ length: taskCount }, (_, i) => `Task ${i + 1}: Finalize module component ${i + 1}`);
 
-  const facts: Record<string, any> = {};
+  const facts = {};
   for (let i = 0; i < factCount; i++) {
     facts[`service_config_${i + 1}`] = {
       port: 8000 + i,
@@ -76,7 +75,7 @@ async function runBenchmarks() {
     { name: "Large Context (35 Tasks, 60 Decisions, 70 Facts)", tasks: 35, decisions: 60, facts: 70 },
   ];
 
-  const results: any[] = [];
+  const results = [];
 
   for (const scenario of scenarios) {
     const pkg = generateContextFixture(scenario.name, scenario.tasks, scenario.decisions, scenario.facts);
