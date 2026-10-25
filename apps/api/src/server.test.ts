@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildServer, MemoryContextStore, validateStartupConfig } from "./server.js";
+import { buildServer, MemoryContextStore, PostgresContextStore, validateStartupConfig } from "./server.js";
 
 test("API: health check returns ok", async () => {
   const app = buildServer();
@@ -431,31 +431,43 @@ test("API: health check reports ready status and fails when dependencies are unh
   assert.ok(failingJson.error.includes("Connection refused"));
 });
 
-test("API: health check never exposes internal infrastructure or connection strings", async () => {
-  const mockPgStore: any = {
-    checkHealth: async () => {
-      // Simulates PostgresContextStore sanitization behavior
-      return {
-        ok: false,
-        database: false,
-        migrationsApplied: 0,
-        storeType: "postgres",
-        error: "Database unavailable",
-      };
-    },
+test("API: PostgresContextStore.checkHealth() catches database driver errors and sanitizes external disclosure", async () => {
+  const pgStore = new PostgresContextStore("postgresql://app_user:fake_password@fake-internal-db.local:5432/ctx_db");
+
+  // Force pool.query to throw driver error with internal host, port, and password
+  (pgStore as any).pool.query = async () => {
+    throw new Error("connect ECONNREFUSED 10.128.0.45:5432 - user postgres password super_secret_db_password_99");
   };
 
-  const app = buildServer({ store: mockPgStore, allowAnonymous: true });
+  // 1. Direct call to PostgresContextStore.checkHealth() exercises the real error catch and sanitization block
+  const health = await pgStore.checkHealth();
+  assert.equal(health.ok, false);
+  assert.equal(health.database, false);
+  assert.equal(health.migrationsApplied, 0);
+  assert.equal(health.storeType, "postgres");
+  assert.equal(health.error, "Database unavailable");
+
+  const healthJson = JSON.stringify(health);
+  assert.ok(!healthJson.includes("10.128.0.45"), "checkHealth() output must not leak IP");
+  assert.ok(!healthJson.includes("super_secret_db_password_99"), "checkHealth() output must not leak password");
+  assert.ok(!healthJson.includes("ECONNREFUSED"), "checkHealth() output must not leak driver error");
+
+  // 2. Fastify HTTP route integration with the real PostgresContextStore instance
+  const app = buildServer({ store: pgStore, allowAnonymous: true });
   const res = await app.inject({ method: "GET", url: "/health" });
   assert.equal(res.statusCode, 503);
-  const json = res.json();
-  assert.equal(json.status, "unhealthy");
-  assert.equal(json.error, "Database unavailable");
+  const body = res.json();
+  assert.equal(body.status, "unhealthy");
+  assert.equal(body.error, "Database unavailable");
+  assert.equal(body.database, false);
 
-  const responseText = res.body;
-  assert.ok(!responseText.includes("10.128.0.45"), "Must not leak internal IP/hostname");
-  assert.ok(!responseText.includes("super_secret_db_password"), "Must not leak password");
-  assert.ok(!responseText.includes("ECONNREFUSED"), "Must not leak raw driver errors");
+  const rawBody = res.body;
+  assert.ok(!rawBody.includes("10.128.0.45"), "HTTP body must not leak internal IP");
+  assert.ok(!rawBody.includes("super_secret_db_password_99"), "HTTP body must not leak password");
+  assert.ok(!rawBody.includes("ECONNREFUSED"), "HTTP body must not leak raw driver errors");
+  assert.ok(!rawBody.includes("fake-internal-db.local"), "HTTP body must not leak internal host");
+
+  await pgStore.close();
 });
 
 test("API: in-memory store is rejected from production mode and reports unhealthy", async () => {

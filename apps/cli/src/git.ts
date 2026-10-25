@@ -14,6 +14,29 @@ export const DEFAULT_SENSITIVE_PATH_PATTERNS = [
   /(?:^|\/)[^/]*service-account[^/]*\.json$/i,
 ];
 
+/**
+ * Native Git pathspec exclusions matching all sensitive patterns.
+ */
+export const GIT_PATHSPEC_EXCLUSIONS = [
+  ":(exclude)*.env",
+  ":(exclude)*.env.*",
+  ":(exclude)*credentials*",
+  ":(exclude)*.pem",
+  ":(exclude)*.key",
+  ":(exclude)*.pkcs12",
+  ":(exclude)*.pfx",
+  ":(exclude)*.keystore",
+  ":(exclude)*id_rsa*",
+  ":(exclude)*id_ed25519*",
+  ":(exclude)*id_ecdsa*",
+  ":(exclude)*kubeconfig*",
+  ":(exclude)*service-account*.json",
+  ":(exclude)*secret*.json",
+  ":(exclude)*secret*.yaml",
+  ":(exclude)*secret*.yml",
+  ":(exclude)*secret*.env",
+];
+
 export function isSensitivePath(filePath: string, customPatterns: RegExp[] = []): boolean {
   const normalized = filePath.replace(/\\/g, "/");
   return [...DEFAULT_SENSITIVE_PATH_PATTERNS, ...customPatterns].some((p) => p.test(normalized));
@@ -130,8 +153,9 @@ export function inspectGit(cwd: string = process.cwd()): GitRepoState {
   let diffPatch: string | undefined = undefined;
   let diffSummary: string | undefined = undefined;
   try {
+    const excludeArgs = GIT_PATHSPEC_EXCLUSIONS.map((arg) => `"${arg}"`).join(" ");
     const rawDiff = execSync(
-      'git diff HEAD -- . ":(exclude)*.env" ":(exclude)*.env.*" ":(exclude)*credentials*" ":(exclude)*.pem" ":(exclude)*.key" ":(exclude)*id_rsa*" ":(exclude)*id_ed25519*" ":(exclude)*kubeconfig*"',
+      `git diff HEAD -- . ${excludeArgs}`,
       { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 1024 * 512 }
     );
     if (rawDiff.trim().length > 0) {

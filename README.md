@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_24%2F24-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_25%2F25-brightgreen.svg)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
@@ -325,7 +325,7 @@ npm test
 ✔ API: authentication middleware enforces token check on protected routes
 ✔ API: multi-tenant isolation prevents cross-organization access
 ✔ API: health check reports ready status and fails when dependencies are unhealthy
-✔ API: health check never exposes internal infrastructure or connection strings
+✔ API: PostgresContextStore.checkHealth() catches database driver errors and sanitizes external disclosure
 ✔ API: in-memory store is rejected from production mode and reports unhealthy
 ✔ API: validateStartupConfig prohibits ephemeral storage in production
 ✔ API: concurrent checkpoint creation maintains atomic version sequence
@@ -335,12 +335,13 @@ npm test
 ✔ Git: redactSecrets masks sensitive credentials and API keys in diffs
 ✔ Git: redactSecrets sanitizes database connection URLs and JWT tokens
 ✔ Git: isSensitivePath identifies files that must never have diff contents captured
+✔ Git: GIT_PATHSPEC_EXCLUSIONS aligns with sensitive path patterns
 ✔ MCP Server: initializes with all core tools registered
 ✔ MCP Server: enforces authentication when calling protected API routes
 ✔ MCP Server: workingTreeClean defaults to fail-closed (clean: false) when omitted or dirty
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-24 passed, 0 failed
+25 passed, 0 failed
 ```
 
 ---

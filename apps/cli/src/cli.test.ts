@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspectGit, redactSecrets, isSensitivePath } from "./git.js";
+import { inspectGit, redactSecrets, isSensitivePath, GIT_PATHSPEC_EXCLUSIONS } from "./git.js";
 import { loadLocalConfig, saveLocalConfig, getCtxConfigPath } from "./config.js";
 import { normalizeArgv } from "./argv.js";
 import fs from "node:fs";
@@ -131,4 +131,20 @@ test("Git: isSensitivePath identifies files that must never have diff contents c
   assert.equal(isSensitivePath("README.md"), false);
   assert.equal(isSensitivePath("package.json"), false);
   assert.equal(isSensitivePath("Dockerfile"), false);
+});
+
+test("Git: GIT_PATHSPEC_EXCLUSIONS aligns with sensitive path patterns", () => {
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*.env"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*credentials*"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*.pem"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*.key"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*.pkcs12"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*.pfx"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*.keystore"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*id_rsa*"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*id_ed25519*"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*id_ecdsa*"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*kubeconfig*"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*service-account*.json"));
+  assert.ok(GIT_PATHSPEC_EXCLUSIONS.includes(":(exclude)*secret*.json"));
 });
