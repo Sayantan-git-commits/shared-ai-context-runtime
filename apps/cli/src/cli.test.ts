@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspectGit } from "./git.js";
+import { inspectGit, redactSecrets } from "./git.js";
 import { loadLocalConfig, saveLocalConfig, getCtxConfigPath } from "./config.js";
 import { normalizeArgv } from "./argv.js";
 import fs from "node:fs";
@@ -53,4 +53,31 @@ test("CLI: normalizeArgv supports path-first syntax 'ctx <path> continue'", () =
   // 4. Standard command-first remains unchanged: ctx continue /path/to/project
   const standard = ["node", "ctx", "continue", "/path/to/project"];
   assert.deepEqual(normalizeArgv(standard), standard);
+});
+
+test("Git: redactSecrets masks sensitive credentials and API keys in diffs", () => {
+  const sampleDiff = `
+diff --git a/config.env b/config.env
++OPENAI_API_KEY=sk-abcdef1234567890abcdef1234567890
++GITHUB_TOKEN=ghp_123456789012345678901234567890123456
++AWS_KEY=AKIAIOSFODNN7EXAMPLE
++AUTH_HEADER="Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.xyz"
++DB_PASSWORD="SuperSecretPassword123"
++NORMAL_VALUE="hello-world"
++-----BEGIN RSA PRIVATE KEY-----
++MIIEowIBAAKCAQEA0Y123456789...
++-----END RSA PRIVATE KEY-----
+`;
+
+  const redacted = redactSecrets(sampleDiff);
+  assert.ok(!redacted.includes("sk-abcdef1234567890abcdef1234567890"), "OpenAI key should be redacted");
+  assert.ok(!redacted.includes("ghp_123456789012345678901234567890123456"), "GitHub token should be redacted");
+  assert.ok(!redacted.includes("AKIAIOSFODNN7EXAMPLE"), "AWS key should be redacted");
+  assert.ok(!redacted.includes("SuperSecretPassword123"), "Password should be redacted");
+  assert.ok(!redacted.includes("MIIEowIBAAKCAQEA0Y123456789"), "Private key block should be redacted");
+  assert.ok(redacted.includes("NORMAL_VALUE=\"hello-world\""), "Non-secret values should be preserved");
+  assert.ok(redacted.includes("[REDACTED API KEY]"));
+  assert.ok(redacted.includes("[REDACTED GITHUB TOKEN]"));
+  assert.ok(redacted.includes("[REDACTED AWS ACCESS KEY]"));
+  assert.ok(redacted.includes("[REDACTED PRIVATE KEY]"));
 });

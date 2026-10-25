@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:17.4-alpine
+    container_name: ctx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ctx_password
+      POSTGRES_DB: ctx_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - ctx-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ctx_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ctx-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ctx-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:ctx_password@postgres:5432/ctx_db
+    command: ["node", "scripts/migrate.ts"]
+
+  ctx-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ctx-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ctx-migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://postgres:ctx_password@postgres:5432/ctx_db
+      CTX_AUTH_TOKEN: ${CTX_AUTH_TOKEN:-}
+      ENABLE_RATE_LIMIT: "true"
+    ports:
+      - "3000:3000"
+
+volumes:
+  ctx-pgdata:

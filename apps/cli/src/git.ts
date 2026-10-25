@@ -1,6 +1,30 @@
 import { execSync } from "node:child_process";
 import type { WorkingTreeSummary } from "@ctx/schemas";
 
+/**
+ * Redacts common secrets, private keys, API keys, and authorization tokens
+ * from diff patches before saving into context checkpoints.
+ */
+export function redactSecrets(diff: string): string {
+  if (!diff) return diff;
+  let out = diff;
+  // 1. Private keys
+  out = out.replace(/-----BEGIN [A-Z0-9_\s-]+PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9_\s-]+PRIVATE KEY-----/gi, "[REDACTED PRIVATE KEY]");
+  // 2. Well-known API key formats
+  out = out.replace(/\bgh[pousr]_[A-Za-z0-9_]{36,}\b/g, "[REDACTED GITHUB TOKEN]");
+  out = out.replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, "[REDACTED SLACK TOKEN]");
+  out = out.replace(/\bsk-[A-Za-z0-9_-]{20,}\b/g, "[REDACTED API KEY]");
+  out = out.replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED AWS ACCESS KEY]");
+  // 3. Bearer tokens in headers or code
+  out = out.replace(/(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}\b/gi, "$1[REDACTED]");
+  // 4. Key/value assignments matching secret names where value was not already redacted
+  out = out.replace(
+    /(["']?(?:api[_-]?key|auth[_-]?token|access[_-]?token|client[_-]?secret|password|passwd|private[_-]?key)["']?\s*[:=]\s*["']?)(?!\[REDACTED)([^"'\s\r\n]{6,})(["']?)/gi,
+    "$1[REDACTED]$3"
+  );
+  return out;
+}
+
 export interface GitRepoState {
   isGitRepo: boolean;
   branch: string;
@@ -75,7 +99,8 @@ export function inspectGit(cwd: string = process.cwd()): GitRepoState {
   try {
     const rawDiff = execSync("git diff HEAD", { cwd, encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"], maxBuffer: 1024 * 512 });
     if (rawDiff.trim().length > 0) {
-      diffPatch = rawDiff.length > 25000 ? rawDiff.slice(0, 25000) + "\n... [diff truncated for length]" : rawDiff;
+      const sanitized = redactSecrets(rawDiff);
+      diffPatch = sanitized.length > 25000 ? sanitized.slice(0, 25000) + "\n... [diff truncated for length]" : sanitized;
       diffSummary = `${changedPaths.length} modified files, ${diffPatch.split("\n").length} diff lines`;
     }
   } catch {

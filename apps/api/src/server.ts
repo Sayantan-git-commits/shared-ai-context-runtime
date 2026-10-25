@@ -5,8 +5,16 @@ import { randomUUID } from "node:crypto";
 import {
   type ContextStore,
   MemoryContextStore,
+  PostgresContextStore,
   ConflictError,
 } from "./store.js";
+
+export {
+  type ContextStore,
+  MemoryContextStore,
+  PostgresContextStore,
+  ConflictError,
+};
 import { ContextSerializer } from "@ctx/serializers";
 import {
   CreateCheckpointInputSchema,

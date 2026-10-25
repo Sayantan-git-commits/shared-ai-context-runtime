@@ -187,18 +187,18 @@ export function createCtxMcpServer(config: McpServerConfig = {}): McpServer {
           branch,
           gitCommit,
           workingTree: {
-            clean: workingTreeClean,
-            changedPaths,
+            clean: workingTreeClean !== undefined ? workingTreeClean : true,
+            changedPaths: changedPaths || [],
             untrackedPaths: [],
           },
           state: {
-            completed: completedItems.map((c) => ({
+            completed: (completedItems || []).map((c) => ({
               description: c.description,
               evidence: c.evidence,
               timestamp: new Date().toISOString(),
             })),
-            pending: pendingItems,
-            decisions: decisions.map((d) => ({ decision: d })),
+            pending: pendingItems || [],
+            decisions: (decisions || []).map((d) => ({ decision: d })),
             blockers: [],
             nextAction,
           },

@@ -54,6 +54,7 @@ export interface ContextStore {
   listEvents(projectId: string, taskId?: string): Promise<AgentEvent[]>;
   acquireTaskLease(taskId: string, agentId: string, durationSeconds?: number): Promise<{ task: Task; leaseToken: string }>;
   releaseTaskLease(taskId: string, leaseToken: string): Promise<Task>;
+  close(): Promise<void>;
 }
 
 export class MemoryContextStore implements ContextStore {
@@ -310,6 +311,10 @@ export class MemoryContextStore implements ContextStore {
     };
     this.tasks.set(taskId, updated);
     return updated;
+  }
+
+  public async close(): Promise<void> {
+    // In-memory store needs no socket teardown
   }
 }
 
@@ -714,5 +719,9 @@ export class PostgresContextStore implements ContextStore {
       expiresAt: row.expires_at ? row.expires_at.toISOString() : null,
       isDeleted: row.is_deleted,
     };
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 }

@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_15%2F15-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_17%2F17-brightgreen.svg)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
@@ -67,7 +67,7 @@ Client adapter:   Claude Code (prompt-ready)
 - 📦 **Immutable Versioned Checkpoints:** Every checkpoint preserves working-tree diffs, uncommitted file lists, completed items with evidence, and next actions.
 - 🛡️ **Git Drift Detection:** Detects and flags branch changes, uncommitted edits, and HEAD commit shifts between sessions before resuming.
 - 📉 **TOON Token Compression:** Evaluates candidate representations using `@toon-format/toon` against minified JSON baselines, dynamically selecting the format that consumes the fewest input tokens.
-- 🔌 **Native Model Context Protocol (MCP) Server:** Exposes 7 typed MCP tools over stdio for direct integration into Cursor, Claude Desktop, and Antigravity.
+- 🔌 **Native Model Context Protocol (MCP) Server:** Exposes 12 typed MCP tools over stdio for direct integration into Cursor, Claude Desktop, and Antigravity.
 - 🐘 **PostgreSQL 17 Canonical Store:** Hybrid relational governance with JSONB snapshots, foreign key cascades, and optimistic concurrency versioning.
 
 ---
@@ -160,9 +160,10 @@ If using your local PostgreSQL instance:
 # Create database
 createdb -U postgres ctx_db
 
-# Run schema migrations
-psql -U postgres -d ctx_db -f migrations/001_initial_schema.sql
+# Run transactional database migrations
+npm run migrate
 ```
+*(Optionally provide a custom connection string: `DATABASE_URL="postgresql://user:pass@host:5432/ctx_db" npm run migrate`)*
 
 ### 3. Start the API Gateway
 
@@ -236,7 +237,8 @@ Connect `ctx` directly to your favorite AI assistant so the model can inspect ch
       "command": "node",
       "args": ["<PATH_TO_REPO>/apps/mcp-server/dist/index.js"],
       "env": {
-        "CTX_API_URL": "http://127.0.0.1:3000"
+        "CTX_API_URL": "http://127.0.0.1:3000",
+        "CTX_AUTH_TOKEN": "your-api-token"
       }
     }
   }
@@ -251,7 +253,8 @@ Connect `ctx` directly to your favorite AI assistant so the model can inspect ch
       "command": "node",
       "args": ["<PATH_TO_REPO>/apps/mcp-server/dist/index.js"],
       "env": {
-        "CTX_API_URL": "http://127.0.0.1:3000"
+        "CTX_API_URL": "http://127.0.0.1:3000",
+        "CTX_AUTH_TOKEN": "your-api-token"
       }
     }
   }
@@ -325,10 +328,12 @@ npm test
 ✔ Git inspector reports repo state safely
 ✔ Config manager saves and loads .ctx/config.json
 ✔ CLI: normalizeArgv supports path-first syntax 'ctx <path> continue'
-✔ MCP Server initializes with all core tools registered
+✔ Git: redactSecrets masks sensitive credentials and API keys in diffs
+✔ MCP Server: initializes with all core tools registered
+✔ MCP Server: enforces authentication when calling protected API routes
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-15 passed, 0 failed
+17 passed, 0 failed
 ```
 
 ---

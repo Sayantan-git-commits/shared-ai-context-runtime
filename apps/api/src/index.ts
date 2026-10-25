@@ -31,3 +31,22 @@ server.listen({ port, host }, (err, address) => {
   }
   console.log(`ctx API listening at ${address} (store: ${process.env.DATABASE_URL ? "PostgreSQL" : "Memory"})`);
 });
+
+// Graceful shutdown and database pool draining
+async function gracefulShutdown(signal: string) {
+  console.log(`[INFO] Received ${signal}, starting graceful shutdown...`);
+  try {
+    await server.close();
+    if (typeof store.close === "function") {
+      await store.close();
+    }
+    console.log("[INFO] Graceful shutdown completed.");
+    process.exit(0);
+  } catch (err) {
+    console.error("[ERROR] Failed to shut down gracefully:", err);
+    process.exit(1);
+  }
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
