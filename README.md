@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
-[![Tests](https://img.shields.io/badge/Tests-Passing_13%2F13-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-Passing_15%2F15-brightgreen.svg)]()
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker)]()
 
 **Cross-client, cross-account, and cross-device persistent context runtime for AI coding agents.**
@@ -321,12 +321,14 @@ npm test
 ✔ API: resolve project and checkpoint workflow
 ✔ API: authentication middleware enforces token check on protected routes
 ✔ API: multi-tenant isolation prevents cross-organization access
+✔ API: concurrent checkpoint creation maintains atomic version sequence
 ✔ Git inspector reports repo state safely
 ✔ Config manager saves and loads .ctx/config.json
+✔ CLI: normalizeArgv supports path-first syntax 'ctx <path> continue'
 ✔ MCP Server initializes with all core tools registered
 ✔ E2E: Full cross-client handoff workflow (Tool A -> Tool B)
 
-13 passed, 0 failed
+15 passed, 0 failed
 ```
 
 ---

@@ -2,17 +2,35 @@ import { encode as encodeToon, decode as decodeToon } from "@toon-format/toon";
 import { encode as gptEncode } from "gpt-tokenizer";
 import type { ContextPackage, EncodedContext, ContextFormat } from "@ctx/schemas";
 
+export interface TokenEstimateInfo {
+  count: number;
+  tokenizer: string;
+  isApproximate: boolean;
+}
+
 /**
- * High-precision BPE token count calculation using cl100k_base tokenizer.
- * Falls back to character-based heuristic only if binary encoding fails.
+ * High-precision BPE token calculation using cl100k_base tokenizer.
+ * Falls back to labeled approximate character heuristic only if tokenizer fails.
  */
-export function estimateTokens(text: string): number {
-  if (!text) return 0;
+export function estimateTokensDetailed(text: string): TokenEstimateInfo {
+  if (!text) return { count: 0, tokenizer: "cl100k_base", isApproximate: false };
   try {
-    return gptEncode(text).length;
+    return {
+      count: gptEncode(text).length,
+      tokenizer: "cl100k_base",
+      isApproximate: false,
+    };
   } catch {
-    return Math.max(1, Math.ceil(text.length / 3.8));
+    return {
+      count: Math.max(1, Math.ceil(text.length / 3.8)),
+      tokenizer: "character_heuristic_fallback",
+      isApproximate: true,
+    };
   }
+}
+
+export function estimateTokens(text: string): number {
+  return estimateTokensDetailed(text).count;
 }
 
 /**
@@ -47,6 +65,8 @@ export interface SerializationResult extends EncodedContext {
   tokenBudget?: number;
   budgetExceeded: boolean;
   prunedItemsCount: number;
+  tokenizerUsed: string;
+  isApproximate: boolean;
 }
 
 export interface BudgetPruneResult {
@@ -204,9 +224,9 @@ export class ContextSerializer {
       }
     }
 
-    const actualEncodedTokens = estimateTokens(serialized);
+    const tokenInfo = estimateTokensDetailed(serialized);
     const finalBudgetExceeded = tokenBudget !== undefined && tokenBudget > 0
-      ? actualEncodedTokens > tokenBudget
+      ? tokenInfo.count > tokenBudget
       : budgetExceeded;
 
     const savingsPercent =
@@ -217,7 +237,7 @@ export class ContextSerializer {
     return {
       format: selectedFormat,
       serialized,
-      estimatedTokens: actualEncodedTokens,
+      estimatedTokens: tokenInfo.count,
       baselineTokens,
       savingsPercent,
       contextVersion: 1,
@@ -226,6 +246,8 @@ export class ContextSerializer {
       tokenBudget,
       budgetExceeded: finalBudgetExceeded,
       prunedItemsCount: prunedCount,
+      tokenizerUsed: tokenInfo.tokenizer,
+      isApproximate: tokenInfo.isApproximate,
     };
   }
 

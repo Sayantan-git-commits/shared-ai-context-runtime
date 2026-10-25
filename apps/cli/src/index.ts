@@ -6,6 +6,7 @@ import { inspectGit } from "./git.js";
 import { loadLocalConfig, saveLocalConfig, getCtxConfigPath } from "./config.js";
 import { CtxApiClient } from "./client.js";
 import { AdapterRegistry } from "@ctx/client-adapters";
+import { normalizeArgv } from "./argv.js";
 
 const program = new Command();
 
@@ -432,39 +433,5 @@ program
 
     console.log("\nDiagnostics complete.");
   });
-
-export function normalizeArgv(argv: string[]): string[] {
-  if (argv.length < 4) return argv;
-  const firstArg = argv[2];
-  const knownCommands = [
-    "init",
-    "status",
-    "checkpoint",
-    "continue",
-    "history",
-    "events",
-    "memory",
-    "doctor",
-    "--help",
-    "-h",
-    "--version",
-    "-v",
-  ];
-
-  if (!knownCommands.includes(firstArg)) {
-    // If firstArg is a directory or path:
-    // e.g. ctx /path/to/project continue
-    const isPathLike =
-      firstArg.includes("/") ||
-      firstArg.includes("\\") ||
-      firstArg.startsWith(".") ||
-      path.isAbsolute(firstArg);
-    const subcommand = argv[3];
-    if (isPathLike && knownCommands.includes(subcommand)) {
-      return [argv[0], argv[1], subcommand, firstArg, ...argv.slice(4)];
-    }
-  }
-  return argv;
-}
 
 program.parse(normalizeArgv(process.argv));

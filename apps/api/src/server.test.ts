@@ -303,4 +303,88 @@ test("API: multi-tenant isolation prevents cross-organization access", async () 
     payload: { agentId: "agent-malicious", durationSeconds: 30 },
   });
   assert.equal(forbiddenLeaseRes.statusCode, 403);
+
+  // 7. Tenant B attempts to read checkpoints of Project A -> 403 Forbidden
+  const forbiddenCheckpointsRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${projA.id}/checkpoints`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+  });
+  assert.equal(forbiddenCheckpointsRes.statusCode, 403);
+
+  // 8. Tenant B attempts to search memories of Project A -> 403 Forbidden
+  const forbiddenSearchRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${projA.id}/memories/search?q=secret`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+  });
+  assert.equal(forbiddenSearchRes.statusCode, 403);
+
+  // 9. Tenant B attempts to read audit events of Project A -> 403 Forbidden
+  const forbiddenEventsRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${projA.id}/events`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+  });
+  assert.equal(forbiddenEventsRes.statusCode, 403);
+
+  // 10. Tenant B attempts to assemble context for Project A -> 403 Forbidden
+  const forbiddenAssembleRes = await app.inject({
+    method: "POST",
+    url: `/v1/projects/${projA.id}/context/assemble`,
+    headers: { authorization: `Bearer ${orgBToken}` },
+    payload: { formatPreference: "auto" },
+  });
+  assert.equal(forbiddenAssembleRes.statusCode, 403);
+});
+
+test("API: concurrent checkpoint creation maintains atomic version sequence", async () => {
+  const app = buildServer();
+
+  // 1. Resolve project
+  const projRes = await app.inject({
+    method: "POST",
+    url: "/v1/projects/resolve",
+    payload: { projectName: "concurrency-test" },
+  });
+  const project = projRes.json();
+
+  // 2. Fire 10 parallel checkpoint creation requests simultaneously
+  const concurrentCount = 10;
+  const requests = Array.from({ length: concurrentCount }, (_, i) =>
+    app.inject({
+      method: "POST",
+      url: `/v1/projects/${project.id}/checkpoints`,
+      payload: {
+        branch: "main",
+        gitCommit: `commit-${i + 1}`,
+        workingTree: { clean: true, changedPaths: [], untrackedPaths: [] },
+        state: {
+          completed: [{ description: `Step ${i + 1}`, timestamp: new Date().toISOString() }],
+          pending: [],
+          decisions: [],
+          blockers: [],
+          nextAction: `Next action ${i + 1}`,
+        },
+      },
+    })
+  );
+
+  const responses = await Promise.all(requests);
+  for (const res of responses) {
+    assert.equal(res.statusCode, 201);
+  }
+
+  // 3. Verify all versions are distinct and strictly sequential (1..10)
+  const versions = responses.map((r) => r.json().version).sort((a: number, b: number) => a - b);
+  assert.deepEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+  // 4. Verify immutable list preserves all 10 checkpoints
+  const listRes = await app.inject({
+    method: "GET",
+    url: `/v1/projects/${project.id}/checkpoints`,
+  });
+  assert.equal(listRes.statusCode, 200);
+  const list = listRes.json();
+  assert.equal(list.length, 10);
 });
