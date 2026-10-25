@@ -10,7 +10,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-22_LTS_(20+-24)-green.svg?logo=node.js)](https://nodejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17.6-336791.svg?logo=postgresql)](https://www.postgresql.org/)
-[![CI Matrix](https://img.shields.io/badge/CI_Matrix-Node_20%20%7C%2022%20%7C%2024-green.svg)](ci/github-ci.yml)
+[![CI](https://github.com/Sayantan-git-commits/shared-ai-context-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/Sayantan-git-commits/shared-ai-context-runtime/actions)
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK_1.32-purple.svg)](https://modelcontextprotocol.io/)
 [![TOON](https://img.shields.io/badge/TOON_Format-4.4.0-ff69b4.svg)](https://toonformat.dev/)
 [![Tests](https://img.shields.io/badge/Tests-Passing_25%2F25-brightgreen.svg)]()
