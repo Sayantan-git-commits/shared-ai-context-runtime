@@ -35,6 +35,7 @@ export interface ServerOptions {
   store?: ContextStore;
   authToken?: string;
   authTokens?: Record<string, string>;
+  organizationId?: string;
   allowedOrigins?: string[] | boolean;
   enableRateLimit?: boolean;
   allowAnonymous?: boolean;
@@ -94,7 +95,7 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       ? authHeader.slice(7).trim()
       : apiKeyHeader;
 
-    let orgId = "00000000-0000-0000-0000-000000000001";
+    let orgId = options.organizationId || "00000000-0000-0000-0000-000000000001";
 
     if (Object.keys(multiTokens).length > 0) {
       if (!token || !multiTokens[token]) {

@@ -53,6 +53,15 @@ jobs:
           DATABASE_URL: postgresql://postgres:ctx_password@127.0.0.1:5432/ctx_db
         run: npm run migrate
 
+      - name: Run production hardening & resilience test suite
+        env:
+          DATABASE_URL: postgresql://postgres:ctx_password@127.0.0.1:5432/ctx_db
+        run: |
+          npm run test:stress
+          npm run test:security
+          npm run test:resilience
+          npm run test:handoff
+
       - name: Run serialization benchmarks
         run: npm run benchmark
 

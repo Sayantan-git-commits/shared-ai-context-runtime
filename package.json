@@ -10,6 +10,11 @@
   "scripts": {
     "build": "npm run --workspace @ctx/schemas build && npm run --workspace @ctx/serializers build && npm run --workspace @ctx/client-adapters build && npm run --workspace @ctx/api build && npm run --workspace @ctx/mcp-server build && npm run --workspace ctx build",
     "test": "npm run --workspaces --if-present test && node --test tests/e2e/*.test.js",
+    "test:stress": "node --test tests/stress/*.test.js",
+    "test:security": "node --test tests/security/*.test.js",
+    "test:resilience": "node --test tests/resilience/*.test.js",
+    "test:handoff": "node --test tests/handoff/*.test.js",
+    "test:all": "npm test && npm run test:stress && npm run test:security && npm run test:resilience && npm run test:handoff",
     "migrate": "node scripts/migrate.js",
     "benchmark": "node benchmarks/run.js",
     "cli": "node apps/cli/dist/index.js",
