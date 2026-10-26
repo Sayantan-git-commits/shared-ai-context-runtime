@@ -3,115 +3,144 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { buildServer } from "../../apps/api/dist/server.js";
 import { PostgresContextStore } from "../../apps/api/dist/store.js";
-import { ClaudeCodeAdapter, PromptHandoffAdapter } from "../../packages/client-adapters/dist/index.js";
-import { ContextSerializer } from "../../packages/serializers/dist/index.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const rootDir = path.resolve(__dirname, "../..");
+const mcpServerScript = path.join(rootDir, "apps/mcp-server/dist/index.js");
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres@127.0.0.1:5432/ctx_db";
+const TEST_TOKEN = "handoff_secret_token_123";
 
-test("Handoff: Independent client processes writing to and reading from PostgreSQL", async () => {
+test("Handoff: Genuine multi-process handoff between standalone API and MCP child process", async () => {
   const store = new PostgresContextStore(DATABASE_URL);
-  const app = buildServer({ store, allowAnonymous: true });
-
-  // 1. Resolve project on persistent database
-  const projectName = `handoff-persistent-${Date.now()}`;
-  const resolveRes = await app.inject({
-    method: "POST",
-    url: "/v1/projects/resolve",
-    payload: { projectName, gitRemoteUrl: `git@github.com:handoff/${projectName}.git` },
+  const api = buildServer({
+    store,
+    authToken: TEST_TOKEN,
   });
-  assert.equal(resolveRes.statusCode, 200);
-  const project = resolveRes.json();
 
-  // 2. Client A creates a structured task
-  const taskRes = await app.inject({
+  const apiAddress = await api.listen({ port: 0, host: "127.0.0.1" });
+  console.log(`Standalone API listening on ${apiAddress}`);
+
+  const projectName = `process-handoff-${Date.now()}`;
+
+  // 1. Writer client (Tool A) writes state via HTTP API to persistent PostgreSQL
+  const resolveRes = await fetch(`${apiAddress}/v1/projects/resolve`, {
     method: "POST",
-    url: `/v1/projects/${project.id}/tasks`,
-    payload: {
-      title: "Implement database connection pooling",
-      status: "in_progress",
-      nextAction: "verify pool drain on process exit",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${TEST_TOKEN}`,
     },
+    body: JSON.stringify({
+      projectName,
+      gitRemoteUrl: `git@github.com:process-handoff/${projectName}.git`,
+    }),
   });
-  assert.equal(taskRes.statusCode, 201);
-  const task = taskRes.json();
+  assert.equal(resolveRes.status, 200);
+  const project = await resolveRes.json();
 
-  // 3. Client A records a persistent checkpoint
-  const ckptRes = await app.inject({
+  const taskRes = await fetch(`${apiAddress}/v1/projects/${project.id}/tasks`, {
     method: "POST",
-    url: `/v1/projects/${project.id}/checkpoints`,
-    payload: {
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${TEST_TOKEN}`,
+    },
+    body: JSON.stringify({
+      title: "Cross-Process Context Transfer Verification",
+      status: "in_progress",
+      nextAction: "verify mcp child process retrieves state",
+    }),
+  });
+  assert.equal(taskRes.status, 201);
+  const task = await taskRes.json();
+
+  const ckptRes = await fetch(`${apiAddress}/v1/projects/${project.id}/checkpoints`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${TEST_TOKEN}`,
+    },
+    body: JSON.stringify({
       taskId: task.id,
-      branch: "feature/pool-drain",
-      gitCommit: "987fedc",
+      branch: "feature/stdio-mcp-handoff",
+      gitCommit: "fa9823c",
       workingTree: {
         clean: false,
-        changedPaths: ["src/pool.ts", "tests/pool.test.ts"],
+        changedPaths: ["apps/mcp-server/src/server.ts"],
         untrackedPaths: [],
       },
       state: {
         completed: [
-          { description: "Pool configuration added", evidence: "tests pass" },
-          { description: "Advisory locks enabled", evidence: "stress test verified" },
+          { description: "Started standalone API process", evidence: "listening on dynamic port" },
+          { description: "Wrote checkpoint from Writer Client A", evidence: "version 1 created in DB" },
         ],
-        pending: ["Verify drain logic", "Add health check timeout"],
-        decisions: [{ decision: "Use pg_advisory_xact_lock for checkpoint isolation" }],
+        pending: ["Read state from Reader MCP Client B"],
+        decisions: [{ decision: "Use StdioClientTransport for real subprocess communication" }],
         blockers: [],
-        nextAction: "verify pool drain on process exit",
+        nextAction: "verify mcp child process retrieves state",
       },
-    },
+    }),
   });
-  assert.equal(ckptRes.statusCode, 201);
-  const checkpoint = ckptRes.json();
+  assert.equal(ckptRes.status, 201);
+  const checkpoint = await ckptRes.json();
   assert.equal(checkpoint.version, 1);
 
-  // 4. Client B (independent context assembly call) reads from PostgreSQL
-  const assembleRes = await app.inject({
-    method: "POST",
-    url: `/v1/projects/${project.id}/context/assemble`,
-    payload: {
-      taskId: task.id,
-      clientType: "claude-code",
-      formatPreference: "auto",
+  // 2. Reader client (Tool B): Launch apps/mcp-server as a completely separate child process over STDIO
+  console.log("Launching MCP server child process over stdio...");
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [mcpServerScript],
+    env: {
+      ...process.env,
+      CTX_API_URL: apiAddress,
+      CTX_AUTH_TOKEN: TEST_TOKEN,
     },
   });
-  assert.equal(assembleRes.statusCode, 200);
-  const assembled = assembleRes.json();
 
-  assert.ok(assembled.content);
-  assert.ok(["toon", "json"].includes(assembled.format));
-  assert.ok(assembled.estimatedTokens > 0);
-
-  // 5. Client B parses with ClaudeCodeAdapter
-  const claudeAdapter = new ClaudeCodeAdapter();
-  const resumeContext = await claudeAdapter.prepareResume(
-    {
-      format: assembled.format,
-      serialized: assembled.content,
-      estimatedTokens: assembled.estimatedTokens,
-      baselineTokens: assembled.baselineTokens || assembled.estimatedTokens,
-      savingsPercent: assembled.savingsPercent,
-      contextVersion: checkpoint.version,
-    },
-    {
-      projectName: project.name,
-      checkpointVersion: checkpoint.version,
-      nextAction: checkpoint.state.nextAction,
-    }
+  const mcpClient = new Client(
+    { name: "test-reader-client", version: "1.0.0" },
+    { capabilities: {} }
   );
 
-  assert.equal(resumeContext.mode, "prompt-ready");
-  assert.ok(resumeContext.promptText.includes(projectName));
-  assert.ok(resumeContext.promptText.includes("verify pool drain on process exit"));
+  try {
+    await mcpClient.connect(transport);
+    console.log("Connected to MCP child process via stdio.");
 
-  // 6. Round-trip fidelity verification
-  const serializer = new ContextSerializer();
-  const decoded = serializer.decode(assembled.content, assembled.format);
-  assert.equal(decoded.projectId, project.id);
-  assert.equal(decoded.checkpointVersion, 1);
-  assert.equal(decoded.taskState.nextAction, "verify pool drain on process exit");
+    // Query tools via MCP protocol
+    const toolsResult = await mcpClient.listTools();
+    const toolNames = toolsResult.tools.map((t) => t.name);
+    assert.ok(toolNames.includes("ctx_assemble_context"), "MCP server must register ctx_assemble_context");
 
-  await store.close();
-  console.log("✓ Real cross-client handoff from persistent PostgreSQL storage verified.");
+    // Tool B invokes ctx_assemble_context through MCP protocol
+    const callResult = await mcpClient.callTool({
+      name: "ctx_assemble_context",
+      arguments: {
+        projectId: project.id,
+        taskId: task.id,
+        formatPreference: "auto",
+      },
+    });
+
+    console.log("callResult:", JSON.stringify(callResult, null, 2));
+    assert.ok(!callResult.isError, "MCP tool call must not have isError=true");
+    const responseText = callResult.content[0].text;
+    assert.ok(responseText.includes("ASSEMBLED CONTEXT"), "Must contain context header");
+    assert.ok(
+      responseText.includes("verify mcp child process retrieves state"),
+      "Assembled context must contain exact nextAction persisted by Tool A"
+    );
+    assert.ok(
+      responseText.includes("Started standalone API process"),
+      "Assembled context must contain completed task history from PostgreSQL"
+    );
+    console.log("✓ Real cross-process handoff via MCP stdio client passed.");
+  } finally {
+    await mcpClient.close().catch(() => {});
+    await api.close();
+    await store.close();
+  }
 });

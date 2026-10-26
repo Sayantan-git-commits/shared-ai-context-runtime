@@ -150,6 +150,35 @@ test("Security: Adversarial cross-tenant access rejection across API and MCP ope
   assert.ok(!JSON.stringify(unauthRes.json()).includes(AUTH_TOKEN_A));
   assert.ok(!JSON.stringify(getProjB.json()).includes("11111111-1111-1111-1111-111111111111"));
 
+  // 10. Direct MCP Tool Protocol Tenant Isolation Verification
+  // Start appA on dynamic port
+  const serverAddressA = await appA.listen({ port: 0, host: "127.0.0.1" });
+  try {
+    // Client configured with Tenant B's credentials attempts to call MCP tools against Tenant A's project
+    const mcpClientB = createCtxMcpServer({
+      apiBaseUrl: serverAddressA,
+      authToken: AUTH_TOKEN_B,
+    });
+
+    const mcpAssembleTool = mcpClientB._registeredTools["ctx_assemble_context"];
+    assert.ok(mcpAssembleTool, "ctx_assemble_context must be registered");
+
+    const mcpAssembleResult = await mcpAssembleTool.handler({
+      projectId: projectA.id,
+      taskId: taskA.id,
+    });
+
+    // Must fail closed with 401 or 403 error inside MCP tool result
+    assert.equal(mcpAssembleResult.isError, true, "Cross-tenant MCP tool call must fail with isError=true");
+    assert.ok(
+      mcpAssembleResult.content[0].text.includes("401") || mcpAssembleResult.content[0].text.includes("403"),
+      "MCP error content must reflect authentication/authorization denial"
+    );
+    console.log("✓ Direct MCP tool tenant isolation confirmed.");
+  } finally {
+    await appA.close();
+  }
+
   await store.close();
   console.log("✓ Full tenant-isolation and authentication penetration audit passed.");
 });
