@@ -128,7 +128,7 @@ test("Handoff: Genuine multi-process handoff between standalone API and MCP chil
     console.log("callResult:", JSON.stringify(callResult, null, 2));
     assert.ok(!callResult.isError, "MCP tool call must not have isError=true");
     const responseText = callResult.content[0].text;
-    assert.ok(responseText.includes("ASSEMBLED CONTEXT"), "Must contain context header");
+    assert.ok(responseText.includes("=== ASSEMBLED CONTEXT"), "Must contain context header");
     assert.ok(
       responseText.includes("verify mcp child process retrieves state"),
       "Assembled context must contain exact nextAction persisted by Tool A"
@@ -137,7 +137,30 @@ test("Handoff: Genuine multi-process handoff between standalone API and MCP chil
       responseText.includes("Started standalone API process"),
       "Assembled context must contain completed task history from PostgreSQL"
     );
-    console.log("✓ Real cross-process handoff via MCP stdio client passed.");
+
+    // Full round-trip fidelity assertions: checkpoint version, branch, commit hash, and changed paths
+    assert.ok(
+      responseText.includes('"checkpointVersion":1') || responseText.includes("checkpointVersion: 1"),
+      "Must preserve exact checkpointVersion: 1"
+    );
+    assert.ok(
+      responseText.includes("feature/stdio-mcp-handoff"),
+      "Must preserve git branch: feature/stdio-mcp-handoff"
+    );
+    assert.ok(
+      responseText.includes("fa9823c"),
+      "Must preserve git commit hash: fa9823c"
+    );
+    assert.ok(
+      responseText.includes("apps/mcp-server/src/server.ts"),
+      "Must preserve workingTree changedPaths: apps/mcp-server/src/server.ts"
+    );
+    assert.ok(
+      responseText.includes('"clean":false') || responseText.includes("clean: false"),
+      "Must preserve workingTree clean: false"
+    );
+
+    console.log("✓ Real cross-process handoff with full metadata fidelity verified.");
   } finally {
     await mcpClient.close().catch(() => {});
     await api.close();

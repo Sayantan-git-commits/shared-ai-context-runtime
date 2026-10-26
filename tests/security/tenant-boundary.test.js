@@ -174,10 +174,104 @@ test("Security: Adversarial cross-tenant access rejection across API and MCP ope
       mcpAssembleResult.content[0].text.includes("401") || mcpAssembleResult.content[0].text.includes("403"),
       "MCP error content must reflect authentication/authorization denial"
     );
-    console.log("✓ Direct MCP tool tenant isolation confirmed.");
+    // Test all registered MCP mutation/query tools under adversarial tenant credentials:
+    // ctx_save_checkpoint, ctx_update_task, ctx_record_event, ctx_acquire_task_lease
+    const mcpSaveCheckpointTool = mcpClientB._registeredTools["ctx_save_checkpoint"];
+    assert.ok(mcpSaveCheckpointTool, "ctx_save_checkpoint must be registered");
+    const mcpSaveCheckpointResult = await mcpSaveCheckpointTool.handler({
+      projectId: projectA.id,
+      taskId: taskA.id,
+      branch: "exploit-branch",
+      completed: ["injected data"],
+      nextAction: "exploit",
+    });
+    assert.equal(mcpSaveCheckpointResult.isError, true, "Adversarial ctx_save_checkpoint must fail closed");
+
+    const mcpUpdateTaskTool = mcpClientB._registeredTools["ctx_update_task"];
+    assert.ok(mcpUpdateTaskTool, "ctx_update_task must be registered");
+    const mcpUpdateTaskResult = await mcpUpdateTaskTool.handler({
+      taskId: taskA.id,
+      nextAction: "exploit hijacked task",
+    });
+    assert.equal(mcpUpdateTaskResult.isError, true, "Adversarial ctx_update_task must fail closed");
+
+    const mcpRecordEventTool = mcpClientB._registeredTools["ctx_record_event"];
+    assert.ok(mcpRecordEventTool, "ctx_record_event must be registered");
+    const mcpRecordEventResult = await mcpRecordEventTool.handler({
+      projectId: projectA.id,
+      eventType: "malicious_event",
+      payload: { data: "exploit" },
+    });
+    assert.equal(mcpRecordEventResult.isError, true, "Adversarial ctx_record_event must fail closed");
+
+    const mcpLeaseTool = mcpClientB._registeredTools["ctx_acquire_task_lease"];
+    assert.ok(mcpLeaseTool, "ctx_acquire_task_lease must be registered");
+    const mcpLeaseResult = await mcpLeaseTool.handler({
+      taskId: taskA.id,
+      agentId: "attacker-agent",
+      ttlSeconds: 60,
+    });
+    assert.equal(mcpLeaseResult.isError, true, "Adversarial ctx_acquire_task_lease must fail closed");
+
+    console.log("✓ Direct MCP tool suite tenant isolation confirmed across all tools.");
   } finally {
     await appA.close();
   }
+
+  // 11. Rate Limiting Verification: Trip 429 Too Many Requests when rate limiting is enabled
+  const rateLimitedApp = buildServer({
+    store,
+    authToken: AUTH_TOKEN_A,
+    enableRateLimit: true,
+  });
+
+  try {
+    let hitRateLimit = false;
+    for (let i = 0; i < 110; i++) {
+      const res = await rateLimitedApp.inject({
+        method: "GET",
+        url: `/v1/projects/${projectA.id}`,
+        headers: { authorization: `Bearer ${AUTH_TOKEN_A}` },
+      });
+      if (res.statusCode === 429) {
+        hitRateLimit = true;
+        break;
+      }
+    }
+    assert.ok(hitRateLimit, "Exceeding 100 requests per minute must trigger HTTP 429 Rate Limit");
+    console.log("✓ Rate limiting trip threshold (HTTP 429) verified.");
+  } finally {
+    await rateLimitedApp.close();
+  }
+
+  // 12. Oversized Payload Verification: Exceeding Fastify payload limit returns 413
+  const oversizedPayload = "A".repeat(2 * 1024 * 1024); // 2 MB (Fastify default bodyLimit is 1 MB)
+  const oversizedRes = await appB.inject({
+    method: "POST",
+    url: "/v1/projects/resolve",
+    headers: {
+      authorization: `Bearer ${AUTH_TOKEN_B}`,
+      "content-type": "application/json",
+    },
+    payload: `{"projectName":"${oversizedPayload}"}`,
+  });
+  assert.equal(oversizedRes.statusCode, 413, "Oversized request payload (>1MB) must fail with HTTP 413 Payload Too Large");
+  console.log("✓ Oversized payload rejection (HTTP 413) verified.");
+
+  // 13. Audit Log Secret Redaction Verification: Injected secret tokens must never leak in error messages
+  const maliciousSecretPayload = "SUPER_SECRET_AWS_KEY_AKIAIOSFODNN7EXAMPLE";
+  const unauthAttempt = await appB.inject({
+    method: "POST",
+    url: "/v1/projects/resolve",
+    headers: {
+      authorization: `Bearer ${maliciousSecretPayload}`,
+      "content-type": "application/json",
+    },
+    payload: JSON.stringify({ projectName: "secret-test" }),
+  });
+  const rawBody = unauthAttempt.body;
+  assert.ok(!rawBody.includes(maliciousSecretPayload), "Secret credential tokens must never appear in response payloads");
+  console.log("✓ Zero-credential leakage in error responses verified.");
 
   await store.close();
   console.log("✓ Full tenant-isolation and authentication penetration audit passed.");

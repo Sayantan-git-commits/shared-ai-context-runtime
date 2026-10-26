@@ -47,6 +47,24 @@ All sensitive secrets must be managed via environment variables (or Vault inject
 | `HOST` | Optional | `0.0.0.0` | Bind host address |
 | `ENABLE_RATE_LIMIT`| Optional | `true` | Enables sliding window rate limiting (100 req/min/IP) |
 
+### Distributed Rate Limiting & Multi-Pod Topologies
+
+> [!IMPORTANT]
+> **Single Pod vs. Multi-Replica Topologies:**
+> The built-in in-memory rate limiter tracks sliding window counters per process instance. When scaling to multiple Kubernetes pods or container replicas behind a load balancer:
+> 1. **Ingress / Gateway Level Throttling (Recommended):** Delegate global request throttling to Kubernetes Ingress controllers (e.g., NGINX `limit-req-zone` or Traefik RateLimit middleware) or API Gateways (e.g., Kong, AWS ALB/API Gateway) to enforce rate limits before requests hit backend pods.
+> 2. **Redis-Backed Distributed Store:** When strict per-IP rate limiting across replicas must be evaluated in-process, configure `@fastify/rate-limit` with an external Redis connection:
+>    ```typescript
+>    import Redis from "ioredis";
+>    const redis = new Redis(process.env.REDIS_URL);
+>    server.register(rateLimit, {
+>      max: 100,
+>      timeWindow: "1 minute",
+>      redis,
+>    });
+>    ```
+> Until distributed Redis rate limiting and multi-replica staging tests are verified in a cluster, deployments with $>1$ replica should rely on Ingress-level limits.
+
 ### Secret Rotation Procedure
 
 1. **Zero-Downtime Token Rotation:**

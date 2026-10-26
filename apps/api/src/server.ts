@@ -80,6 +80,28 @@ export function buildServer(options: ServerOptions = {}): FastifyInstance {
       max: 100,
       timeWindow: "1 minute",
     });
+
+    // Explicit fallback in-memory rate limiter hook for synchronous fastify registration
+    const requestCounts = new Map<string, { count: number; resetAt: number }>();
+    server.addHook("onRequest", async (request, reply) => {
+      const key = request.ip || "127.0.0.1";
+      const now = Date.now();
+      const windowMs = 60 * 1000;
+      const current = requestCounts.get(key);
+      if (!current || now > current.resetAt) {
+        requestCounts.set(key, { count: 1, resetAt: now + windowMs });
+      } else {
+        current.count += 1;
+        if (current.count > 100) {
+          reply.header("retry-after", Math.ceil((current.resetAt - now) / 1000));
+          return reply.status(429).send({
+            statusCode: 429,
+            error: "Too Many Requests",
+            message: "Rate limit exceeded, retry in 1 minute",
+          });
+        }
+      }
+    });
   }
 
   const multiTokens = options.authTokens || parseAuthTokens(process.env.CTX_AUTH_TOKENS);
